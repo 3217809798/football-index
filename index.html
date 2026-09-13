@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>足球指数中心 · 竞彩交易量与超级指数</title>
+<meta name="description" content="竞彩足球指数数据页面，展示每场比赛的指数、交易量、比例、赔付、价位、挂牌指数、欧洲平均、凯利方差等数据。" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%BD%3C/text%3E%3C/svg%3E" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="足球指数中心 · 竞彩交易量与超级指数" />
+<meta property="og:description" content="竞彩足球必发交易量、比例、赔付、价位、挂牌指数、欧洲平均、凯利方差与大小球指数。" />
+<style>
+/* ============ 基础 ============ */
+*,*::before,*::after{box-sizing:border-box}
+:root{
+  /* 原站 c.spdex.com/spdexlehejc 的橙色系 */
+  --brand:#ff9900;          /* 主橙：场次标题条 / 分页当前页 */
+  --brand-d:#e88a00;        /* 深橙：hover */
+  --head:#ffe6c0;           /* 表头底色 */
+  --row:#f0f0f0;            /* 数据格底色 */
+  --row-team:#fff7ea;       /* 队名列底色 */
+  --row-hover:#e9ecf1;      /* 行悬停 */
+  --bar:#ffe4bb;            /* 底部数据条 */
+  --bar-2:#ffd699;          /* 总成交格 */
+  --bar-ink:#6b4a00;        /* 总成交格文字 */
+  --cream-l:#ffe6c0;        /* 标题条上的浅色文字 */
+  --ink:#2b3440;
+  --ink-2:#596676;
+  --up:#d92b2b;             /* 正 → 红（国内习惯） */
+  --down:#0a9d54;           /* 负 → 绿 */
+}
+html,body{margin:0;padding:0}
+body{
+  background:#eef1f5;
+  color:var(--ink);
+  font:13px/1.5 "Microsoft YaHei","PingFang SC","Hiragino Sans GB","Helvetica Neue",Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:#333;text-decoration:none}
+a:hover{color:#c60}
+.wrap{width:986px;margin:0 auto;background:#fff;min-height:100vh;box-shadow:0 0 24px rgba(31,45,61,.08)}
+
+/* ============ 顶栏 ============ */
+.nbar{
+  display:flex;align-items:center;gap:14px;height:52px;padding:0 12px;
+  background:#fafafa;border-bottom:1px solid #ddd;
+}
+.door{display:flex;align-items:center;gap:6px;flex:0 0 auto;color:#455569;white-space:nowrap}
+.door label{font-weight:700;font-size:12px}
+.door select{
+  font:13px/1.4 inherit;padding:3px 6px;border:1px solid #d5d9e0;border-radius:4px;
+  background:#fff;color:#455569;cursor:pointer
+}
+/* 交易播报跑马灯 */
+.ticker{flex:1 1 auto;min-width:0;overflow:hidden;position:relative;height:24px;color:#455569;font-size:12px}
+.ticker::after{content:"";position:absolute;top:0;right:0;width:40px;height:100%;
+  background:linear-gradient(90deg,rgba(250,250,250,0),#fafafa)}
+.ticker-track{position:absolute;white-space:nowrap;will-change:transform;animation:tick 60s linear infinite}
+.ticker:hover .ticker-track{animation-play-state:paused}
+@keyframes tick{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+.ticker b{color:#3300ff}
+.ticker u{color:var(--up);text-decoration:none;font-weight:700}
+.logo{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.logo-mark{width:26px;height:26px;border-radius:7px;background:linear-gradient(145deg,#ffb340,#f28100);
+  display:grid;place-items:center;color:#fff;font-size:15px;box-shadow:0 1px 3px rgba(242,129,0,.5)}
+.logo-text{line-height:1.1}
+.logo-text strong{display:block;font-size:14px;letter-spacing:.5px}
+.logo-text span{display:block;font-size:10px;color:#9aa3ae;letter-spacing:1px}
+
+/* ============ 工具条 ============ */
+.toolbar{
+  position:sticky;top:0;z-index:60;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:10px 12px;background:rgba(255,255,255,.95);backdrop-filter:blur(6px);
+  border-bottom:1px solid #e3e6eb;
+}
+.toolbar input[type=search]{
+  font:13px/1.4 inherit;padding:6px 10px;width:180px;border:1px solid #d5d9e0;border-radius:5px;outline:none
+}
+.toolbar input[type=search]:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(255,153,0,.18)}
+.toolbar select{font:13px/1.4 inherit;padding:6px 8px;border:1px solid #d5d9e0;border-radius:5px;background:#fff;cursor:pointer}
+.btn{
+  font:13px/1.4 inherit;padding:6px 12px;border:1px solid #d5d9e0;border-radius:5px;
+  background:#fff;color:var(--ink-2);cursor:pointer
+}
+.btn:hover{border-color:var(--brand);color:var(--brand-d)}
+.stats{margin-left:auto;font-size:12px;color:#8a939e;white-space:nowrap}
+.stats em{font-style:normal;color:var(--brand-d);font-weight:700}
+
+/* ============ 单场比赛 ============ */
+.match{margin-top:14px}
+.datatitle{
+  display:flex;align-items:center;gap:10px;height:30px;padding:0 10px;
+  background:var(--brand);color:#fff;cursor:pointer;user-select:none;
+  transition:background .15s
+}
+.datatitle:hover{background:var(--brand-d)}
+.datatitle:focus-visible{outline:2px solid #1a73e8;outline-offset:-2px}
+.datatitle h3{
+  margin:0;flex:1 1 auto;min-width:0;font-size:13px;font-weight:700;
+  padding-left:18px;position:relative;white-space:nowrap;overflow:hidden;text-overflow:ellipsis
+}
+/* 折叠箭头 */
+.datatitle h3::before{
+  content:"";position:absolute;left:3px;top:50%;width:0;height:0;
+  border:5px solid transparent;border-top-color:#fff;transform:translateY(-3px);
+  transition:transform .2s
+}
+.match.collapsed .datatitle h3::before{transform:translateY(-6px) rotate(-90deg)}
+.datatitle .matchtime{flex:0 0 auto;font-size:12px;color:var(--cream-l);padding-left:10px;border-left:1px solid rgba(255,255,255,.35)}
+
+.viewer{display:grid;grid-template-rows:1fr;transition:grid-template-rows .25s ease}
+.viewer>div{overflow:hidden}
+.match.collapsed .viewer{grid-template-rows:0fr}
+
+/* ============ 数据表（原站：米色表头 + 灰底数据格 + 米黄队名列）============ */
+.tablescroll{overflow-x:auto;background:#fff}
+table.datatable{
+  width:100%;min-width:700px;border-collapse:separate;border-spacing:0;
+  background:#fff;font-variant-numeric:tabular-nums;font-feature-settings:"tnum"
+}
+.datatable th{
+  background:var(--head);color:#666;font-weight:400;font-size:12px;height:30px;
+  text-align:center;padding:0 4px;border-right:1px solid #fff;white-space:nowrap
+}
+.datatable th.teamname{width:104px;text-align:left;padding-left:10px}
+.datatable td{
+  background:var(--row);color:var(--ink-2);height:28px;text-align:center;
+  padding:0 4px;border-right:1px solid #fff;transition:background .12s
+}
+.datatable th:last-child,.datatable td:last-child{border-right:none}
+.datatable tbody tr:hover td{background:var(--row-hover)}
+.datatable td.teamname{
+  width:104px;text-align:left;padding-left:10px;
+  background:var(--row-team);color:var(--ink);font-weight:700
+}
+.datatable tbody tr:hover td.teamname{background:#fff1dc}
+.datatable td.long,.datatable th.long{min-width:74px}
+.datatable .draw-tag{color:#b6bcc5;font-weight:400;font-size:12px}
+
+/* 比例迷你条 */
+.pct{position:relative}
+.pct i{
+  position:absolute;left:0;top:3px;bottom:3px;border-radius:0 3px 3px 0;
+  background:rgba(255,153,0,.35);pointer-events:none
+}
+.pct span{position:relative;font-weight:700;color:#7a5a12}
+.ou .pct i{background:rgba(74,144,226,.35)}
+.ou .pct span{color:#3d6091}
+
+/* 数值涨跌色：正 → 红，负 → 绿（国内习惯）
+   注意必须写成 .datatable td.up 才盖得过 .datatable td 的默认色 */
+.datatable td.up{color:var(--up);font-weight:700}
+.datatable td.down{color:var(--down);font-weight:700}
+
+/* ============ 底部数据条 ============ */
+.dataline{
+  display:flex;align-items:stretch;margin-top:1px;height:26px;font-size:12px;
+  background:var(--bar)
+}
+.dataline .cj{
+  flex:0 0 auto;padding:0 10px;line-height:26px;background:var(--bar-2);
+  color:var(--bar-ink);font-weight:700;min-width:200px
+}
+.dataline .dltime{margin-left:auto;padding:0 10px;line-height:26px;color:#999;white-space:nowrap}
+
+/* ============ 分页 ============ */
+.pager{display:flex;align-items:center;gap:6px;padding:18px 12px;font-size:13px;color:var(--ink-2);flex-wrap:wrap}
+.pager .info{margin-right:12px;color:#8a939e}
+.pager a,.pager b,.pager .ellipsis{
+  display:inline-block;min-width:28px;height:28px;line-height:26px;text-align:center;
+  padding:0 8px;border:1px solid #d5d9e0;border-radius:5px;background:#fff;color:var(--ink-2)
+}
+.pager b{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:700}
+.pager a:hover{border-color:var(--brand);color:var(--brand-d)}
+.pager a.disabled{color:#c6ccd4;pointer-events:none}
+
+.empty{padding:60px 20px;text-align:center;color:#9aa3ae}
+
+/* ============ 实时状态（本地服务下的自动刷新） ============ */
+.live{
+  display:flex;align-items:center;gap:7px;flex:0 0 auto;
+  font-size:12px;color:#6b7280;white-space:nowrap
+}
+.live .dot{
+  width:8px;height:8px;border-radius:50%;background:#c6ccd4;flex:0 0 auto;
+  transition:background .2s
+}
+.live.on .dot{background:#18a058;box-shadow:0 0 0 3px rgba(24,160,88,.15);animation:pulse 2.2s ease-in-out infinite}
+.live.busy .dot{background:var(--brand);animation:pulse .9s ease-in-out infinite}
+.live.err  .dot{background:var(--up);box-shadow:0 0 0 3px rgba(217,43,43,.14)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.live em{font-style:normal;color:var(--brand-d);font-weight:700;font-variant-numeric:tabular-nums}
+.livebtn{
+  font:inherit;font-size:12px;padding:3px 9px;border:1px solid #d5d9e0;border-radius:5px;
+  background:#fff;color:var(--ink-2);cursor:pointer;transition:.15s
+}
+.livebtn:hover{border-color:var(--brand);color:var(--brand-d)}
+.livebtn:disabled{color:#c6ccd4;border-color:#e3e6eb;cursor:default}
+.live.off .livebtn{display:none}
+
+/* 数据刚到时的轻微提示，不打断当前操作 */
+.stats{transition:background .45s ease!important;border-radius:4px}
+.stats.flash{background:#ffeccd}
+
+.toast{
+  position:fixed;left:50%;top:14px;z-index:99;transform:translate(-50%,-18px);
+  padding:8px 16px;border-radius:8px;background:rgba(28,32,38,.9);color:#fff;
+  font-size:12.5px;opacity:0;pointer-events:none;transition:.25s ease;
+  box-shadow:0 6px 20px rgba(0,0,0,.18)
+}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+
+/* ============ 响应式 ============ */
+@media (max-width:1010px){
+  .wrap{width:100%;box-shadow:none}
+  .toolbar input[type=search]{width:140px}
+}
+@media (max-width:640px){
+  .nbar{flex-wrap:wrap;height:auto;padding:8px 10px;gap:8px}
+  .ticker{order:3;flex-basis:100%}
+  .stats{margin-left:0;flex-basis:100%}
+  .live{margin-left:auto}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- 顶栏 -->
+  <div class="nbar">
+    <div class="door">
+      <label for="dropJc">竞彩期刊：</label>
+      <select id="dropJc"></select>
+    </div>
+    <div class="ticker" id="ticker"><div class="ticker-track" id="tickerTrack"></div></div>
+    <div class="live" id="live" title="自动刷新状态">
+      <span class="dot"></span>
+      <span class="ltxt" id="liveText">检查服务中…</span>
+      <button class="livebtn" id="liveBtn" type="button">立即刷新</button>
+    </div>
+    <div class="logo">
+      <div class="logo-mark">⚽</div>
+      <div class="logo-text"><strong>足球指数中心</strong><span>SPORTS INDEX</span></div>
+    </div>
+  </div>
+
+  <!-- 工具条 -->
+  <div class="toolbar">
+    <input type="search" id="q" placeholder="搜索球队 / 场次…" autocomplete="off" />
+    <select id="sort">
+      <option value="no">按场次顺序</option>
+      <option value="time">按开赛时间</option>
+      <option value="total">按总成交额 ↓</option>
+      <option value="hpct">按主胜比例 ↓</option>
+    </select>
+    <button class="btn" id="toggleAll" type="button">全部折叠</button>
+    <div class="stats" id="stats"></div>
+  </div>
+
+  <!-- 比赛列表 -->
+  <div id="list"></div>
+
+  <!-- 分页 -->
+  <div class="pager" id="pager"></div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- 内联快照 data-inline.js 改为按需动态加载：线上跑 http 时只拉 data.json，
+     省掉一半流量；用 file:// 双击打开时才会加载它 -->
+<script>
+(function(){
+  "use strict";
+
+  var PER_PAGE = 8;
+  var state = { data:null, page:1, q:"", sort:"no", allCollapsed:false, collapsed:{} };
+
+  /* 常见球队简称 → 全称，便于用「曼联」搜到「曼彻斯特联」 */
+  var ALIAS = {
+    "曼联":"曼彻斯特联", "曼城":"曼彻斯特城", "红魔":"曼彻斯特联", "蓝月亮":"曼彻斯特城",
+    "皇马":"皇家马德里", "马竞":"马德里竞技", "巴萨":"巴塞罗那", "拜仁":"拜仁慕尼黑",
+    "尤文":"尤文图斯", "国米":"国际米兰", "巴黎":"巴黎圣日尔曼", "大巴黎":"巴黎圣日尔曼",
+    "枪手":"阿森纳", "热刺":"托特纳姆热刺", "红军":"利物浦", "蓝军":"切尔西",
+    "多特":"多特蒙德", "药厂":"勒沃库森", "米兰":"AC米兰"
+  };
+  var ALIAS_BY_TEAM = (function(){
+    var map = {};
+    Object.keys(ALIAS).forEach(function(k){
+      var full = ALIAS[k];
+      (map[full] = map[full] || []).push(k);
+    });
+    return map;
+  })();
+
+  function searchKey(m){
+    var extra = [];
+    [m.home, m.away].forEach(function(t){
+      (ALIAS_BY_TEAM[t] || []).forEach(function(a){ extra.push(a); });
+    });
+    return (m.title + " " + m.home + " " + m.away + " " + m.kickoff + " " + extra.join(" ")).toLowerCase();
+  }
+  /* 子序列匹配：「曼联」是「曼彻斯特联」的子序列，容错更高 */
+  function subseq(q, s){
+    if(!s) return false;
+    var i = 0;
+    for(var j = 0; j < s.length && i < q.length; j++){
+      if(s.charAt(j) === q.charAt(i)) i++;
+    }
+    return i >= q.length;
+  }
+
+  /* ---------- 工具函数 ---------- */
+  function esc(s){
+    return String(s==null?"":s).replace(/[&<>"']/g,function(c){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+    });
+  }
+  function num(s){ // "17%" -> 17 ; "1,234" -> 1234
+    var v = parseFloat(String(s||"").replace(/[^0-9.\-]/g,""));
+    return isNaN(v) ? 0 : v;
+  }
+  function fmt(n){ return n.toLocaleString("en-US"); }
+  function kickoffTs(s){
+    var m = String(s||"").match(/(\d{4})\D(\d{1,2})\D(\d{1,2})\D+(\d{1,2}):(\d{2})/);
+    if(!m) return 0;
+    return +new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5]);
+  }
+  function signCls(v){ // 正 → 红，负 → 绿
+    var n = num(v);
+    if(n > 0) return "up";
+    if(n < 0) return "down";
+    return "";
+  }
+  function pctCell(v, isOU){
+    var n = Math.max(0, Math.min(100, num(v)));
+    return '<td class="pct' + (isOU ? " ou" : "") + '">' +
+             '<i style="width:' + n + '%"></i><span>' + esc(v) + "</span></td>";
+  }
+
+  /* ---------- 渲染：交易播报 ---------- */
+  function renderTicker(matches){
+    var tops = [];
+    matches.forEach(function(m){
+      (m.rows || []).forEach(function(r, i){
+        if(!r.vol) return;
+        tops.push({
+          match: m.home + " VS " + m.away,
+          side: i === 0 ? "主胜" : (i === 2 ? "客胜" : "平局"),
+          vol: r.vol, price: r.price, time: m.updateTime
+        });
+      });
+    });
+    tops.sort(function(a,b){ return num(b.vol) - num(a.vol); });
+    tops = tops.slice(0, 6);
+    var tk = document.getElementById("ticker");
+    if(!tops.length){ tk.style.display = "none"; return; }
+    tk.style.display = "";
+
+    var one = tops.map(function(t){
+      return "<b>比赛</b>:" + esc(t.match) + " 市场:标准盘 " + esc(t.side) + ":<u>" +
+             esc(t.vol) + "</u> 价位:" + esc(t.price) + " 时间:" + esc(t.time);
+    }).join(" --- ");
+
+    var html = '<span style="color:#3300ff"><strong>竞彩指数快报</strong></span> --- 必发交易所交易量 Top6：' + one + " --- ";
+    document.getElementById("tickerTrack").innerHTML = html + html; // 复制一份实现无缝循环
+  }
+
+  /* ---------- 渲染：单场比赛 ---------- */
+  function rowHtml(r){
+    var nameCell = r.name
+      ? '<td class="teamname">' + esc(r.name) + "</td>"
+      : '<td class="teamname"><span class="draw-tag">平局</span></td>';
+
+    return "<tr>" + nameCell +
+      "<td>" + esc(r.idx) + "</td>" +
+      '<td class="long">' + esc(r.vol) + "</td>" +
+      pctCell(r.pct, false) +
+      '<td class="' + signCls(r.pay) + '">' + esc(r.pay) + "</td>" +
+      "<td>" + esc(r.price) + "</td>" +
+      '<td class="' + signCls(r.listed) + '">' + esc(r.listed) + "</td>" +
+      "<td>" + esc(r.euro) + "</td>" +
+      "<td>" + esc(r.kelly) + "</td>" +
+      '<td class="long">' + esc(r.ouVol) + "</td>" +
+      (r.ouPct ? pctCell(r.ouPct, true) : "<td></td>") +
+      "<td>" + esc(r.ouPrice) + "</td>" +
+      "<td>" + esc(r.ouIdx) + "</td>" +
+    "</tr>";
+  }
+
+  function matchHtml(m, idx){
+    var cols = (state.data.columns || []).map(function(c){
+      var cls = c === "球队队名" ? "teamname" : (/交易量/.test(c) ? "long" : "");
+      return "<th" + (cls ? ' class="' + cls + '"' : "") + ">" + esc(c) + "</th>";
+    }).join("");
+
+    // 折叠状态按场次 id 记忆在 state.collapsed 里，自动刷新重渲染后不会丢
+    var isC = !!state.collapsed[m.id];
+    return '<div class="match' + (isC ? " collapsed" : "") + '" data-id="' + esc(m.id) + '">' +
+      '<div class="datatitle" role="button" tabindex="0" aria-expanded="' + (isC ? "false" : "true") + '">' +
+        "<h3>" + esc(m.title) + "</h3>" +
+        '<span class="matchtime">开赛时间：' + esc(m.kickoff) + "</span>" +
+      "</div>" +
+      '<div class="viewer"><div>' +
+        '<div class="tablescroll"><table class="datatable">' +
+          "<thead><tr>" + cols + "</tr></thead>" +
+          "<tbody>" + (m.rows || []).map(rowHtml).join("") + "</tbody>" +
+        "</table></div>" +
+        '<div class="dataline">' +
+          '<span class="cj">交易量总成交：' + esc(m.total || "-") + "</span>" +
+          '<span class="dltime">更新时间：' + esc(m.updateTime || "-") + "</span>" +
+        "</div>" +
+      "</div></div>" +
+    "</div>";
+  }
+
+  /* ---------- 渲染：分页 ---------- */
+  function renderPager(total, pages){
+    var el = document.getElementById("pager");
+    if(pages <= 1){ el.innerHTML = total ? '<span class="info">共 ' + total + " 场</span>" : ""; return; }
+    var p = state.page, html = '<span class="info">第 ' + p + " 页，共 " + pages + " 页（" + total + " 场）</span>";
+    html += '<a class="' + (p === 1 ? "disabled" : "") + '" data-p="1">&laquo;</a>';
+    html += '<a class="' + (p === 1 ? "disabled" : "") + '" data-p="' + (p-1) + '">&lsaquo;</a>';
+    for(var i = 1; i <= pages; i++){
+      html += (i === p) ? "<b>" + i + "</b>" : '<a data-p="' + i + '">' + i + "</a>";
+    }
+    html += '<a class="' + (p === pages ? "disabled" : "") + '" data-p="' + (p+1) + '">&rsaquo;</a>';
+    html += '<a class="' + (p === pages ? "disabled" : "") + '" data-p="' + pages + '">&raquo;</a>';
+    el.innerHTML = html;
+  }
+
+  /* ---------- 主渲染 ---------- */
+  function render(){
+    var rows = state.data.matches.slice();
+
+    // 搜索：全称/简称/子串/子序列 均可命中
+    if(state.q){
+      var q = state.q.toLowerCase();
+      rows = rows.filter(function(m){
+        var key = m.__key || (m.__key = searchKey(m));
+        return key.indexOf(q) > -1 || subseq(q, m.home) || subseq(q, m.away);
+      });
+    }
+    // 排序
+    if(state.sort === "time"){
+      rows.sort(function(a,b){ return kickoffTs(a.kickoff) - kickoffTs(b.kickoff); });
+    }else if(state.sort === "total"){
+      rows.sort(function(a,b){ return num(b.total) - num(a.total); });
+    }else if(state.sort === "hpct"){
+      rows.sort(function(a,b){
+        var x = num(a.rows[0] && a.rows[0].pct), y = num(b.rows[0] && b.rows[0].pct);
+        return y - x;
+      });
+    }
+
+    var pages = Math.max(1, Math.ceil(rows.length / PER_PAGE));
+    if(state.page > pages) state.page = pages;
+    var slice = rows.slice((state.page - 1) * PER_PAGE, state.page * PER_PAGE);
+
+    document.getElementById("list").innerHTML = slice.length
+      ? slice.map(matchHtml).join("")
+      : '<div class="empty">没有匹配的比赛，换个关键词试试。</div>';
+
+    renderPager(rows.length, pages);
+
+    // 统计
+    var totalVol = state.data.matches.reduce(function(s,m){ return s + num(m.total); }, 0);
+    document.getElementById("stats").innerHTML =
+      "共 <em>" + state.data.matches.length + "</em> 场 · 总成交 <em>" + fmt(totalVol) +
+      "</em> · 数据更新 " + esc(state.data.fetchedAt || "-");
+  }
+
+  /* ---------- 事件 ---------- */
+  function bind(){
+    var q = document.getElementById("q");
+    var t;
+    q.addEventListener("input", function(){
+      clearTimeout(t);
+      t = setTimeout(function(){ state.q = q.value.trim(); state.page = 1; render(); }, 180);
+    });
+
+    document.getElementById("sort").addEventListener("change", function(e){
+      state.sort = e.target.value; state.page = 1; render();
+    });
+
+    document.getElementById("toggleAll").addEventListener("click", function(e){
+      state.allCollapsed = !state.allCollapsed;
+      e.target.textContent = state.allCollapsed ? "全部展开" : "全部折叠";
+      // 逐场写入折叠表，这样自动刷新后展开/收起状态依然保持
+      (state.data.matches || []).forEach(function(m){
+        state.collapsed[m.id] = state.allCollapsed;
+      });
+      render();
+    });
+
+    // 手动触发一次抓取
+    document.getElementById("liveBtn").addEventListener("click", function(){
+      var b = this;
+      b.disabled = true;
+      fetch("/api/refresh", { method: "POST" })
+        .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+        .then(function(){ toast("已触发抓取，约 30 秒后自动更新…"); })
+        .catch(function(){ toast("本地服务未响应"); })
+        .then(function(){ setTimeout(function(){ b.disabled = false; }, 2500); });
+    });
+
+    document.getElementById("list").addEventListener("click", function(e){
+      var title = e.target.closest(".datatitle");
+      if(!title) return;
+      var match = title.parentNode;
+      var collapsed = match.classList.toggle("collapsed");
+      title.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      state.collapsed[match.getAttribute("data-id")] = collapsed;
+    });
+    document.getElementById("list").addEventListener("keydown", function(e){
+      if(e.key !== "Enter" && e.key !== " ") return;
+      var title = e.target.closest(".datatitle");
+      if(!title) return;
+      e.preventDefault();
+      title.click();
+    });
+
+    document.getElementById("pager").addEventListener("click", function(e){
+      var a = e.target.closest("a[data-p]");
+      if(!a || a.classList.contains("disabled")) return;
+      state.page = parseInt(a.getAttribute("data-p"), 10) || 1;
+      render();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  }
+
+  /* ---------- 应用一份数据（首屏与自动刷新共用同一个入口） ---------- */
+  function flashStats(){
+    var el = document.getElementById("stats");
+    if(!el) return;
+    el.classList.add("flash");
+    setTimeout(function(){ el.classList.remove("flash"); }, 1000);
+  }
+
+  var toastTimer;
+  function toast(msg){
+    var el = document.getElementById("toast");
+    if(!el) return;
+    el.textContent = msg;
+    el.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ el.classList.remove("show"); }, 2800);
+  }
+
+  function applyData(d, announce){
+    var dateChanged = !state.data || state.data.date !== d.date;
+    state.data = d;
+
+    // 期刊下拉（服务模式下只有当前期）
+    var sel = document.getElementById("dropJc");
+    sel.innerHTML = '<option value="' + esc(d.date) + '">' + esc(d.date) + "</option>";
+    sel.disabled = true;
+    document.title = d.date + " 期 · 足球指数中心";
+
+    renderTicker(d.matches);
+    if(dateChanged) state.page = 1;
+    render();
+    paintLive();
+    flashStats();
+    if(announce) toast("数据已更新 · " + (d.fetchedAt || ""));
+  }
+
+  /* ---------- 实时刷新（配合 spdex_server.py） ---------- */
+  var live = { on:false, started:false, seq:-1, es:null, st:null, left:0, tick:null, polling:false };
+
+  function mmss(sec){
+    sec = Math.max(0, sec | 0);
+    var m = Math.floor(sec / 60), s = sec % 60;
+    return m + ":" + (s < 10 ? "0" : "") + s;
+  }
+
+  function paintLive(){
+    var el = document.getElementById("live");
+    var tx = document.getElementById("liveText");
+    var bt = document.getElementById("liveBtn");
+    if(!el || !tx) return;
+
+    if(!live.on){                       // 没有本地服务：静态托管或 file:// 打开
+      el.className = "live off";
+      var d = state.data;
+      if(d && d.fetchedAt){
+        tx.textContent = "数据更新 " + d.fetchedAt.slice(5, 16);
+        el.title = "本页数据抓取于 " + d.fetchedAt + "（静态页面，需在服务器端更新数据文件）";
+      }else{
+        tx.textContent = "静态数据";
+        el.title = "静态页面";
+      }
+      return;
+    }
+    var s = live.st || {};
+    bt.disabled = !!s.running;
+    if(s.running){
+      el.className = "live on busy";
+      tx.textContent = "正在抓取…";
+      el.title = "服务正在抓取最新数据";
+    }else if(s.error){
+      el.className = "live on err";
+      tx.innerHTML = "抓取失败 · <em>" + mmss(live.left) + "</em> 后重试";
+      el.title = s.error;
+    }else{
+      el.className = "live on";
+      tx.innerHTML = "自动刷新 · 剩 <em>" + mmss(live.left) + "</em>";
+      el.title = "上次抓取 " + (s.lastOkAt || "-") + "　数据时间 " + (s.fetchedAt || "-");
+    }
+  }
+
+  function onStatus(s){
+    live.st = s;
+    live.left = s.nextRunIn || 0;
+    if(!live.on){
+      live.on = true;
+      live.seq = s.seq;               // 首帧只记录版本号，避免刚打开就重复拉取
+    }else if(s.seq !== live.seq){
+      live.seq = s.seq;               // 服务端抓到了新数据 → 立刻重载并保留用户当前视图
+      pullData(true);
+    }
+    paintLive();
+    if(!live.tick){
+      live.tick = setInterval(function(){
+        if(live.left > 0) live.left--;
+        paintLive();
+      }, 1000);
+    }
+  }
+
+  function pullData(announce){
+    fetch("data.json?_=" + Date.now(), { cache: "no-store" })
+      .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+      .then(function(d){ applyData(d, announce); })
+      .catch(function(){ /* 读取失败就保持当前画面，不打断用户 */ });
+  }
+
+  function openSSE(){
+    if(live.es) return;
+    try{                                // SSE 优先，断线浏览器会自动重连
+      live.es = new EventSource("/api/events");
+      live.es.onmessage = function(e){
+        try{ onStatus(JSON.parse(e.data)); }catch(_){}
+      };
+    }catch(_){}
+  }
+
+  function probe(){
+    if(live.polling) return;
+    live.polling = true;
+    fetch("/api/status", { cache: "no-store" })
+      .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+      .then(function(s){
+        if(!s || typeof s.seq !== "number") throw 0;
+        live.started = true;
+        openSSE();
+        onStatus(s);
+      })
+      .catch(function(){ /* 虚拟主机等静态托管：没有后端，保持静态模式，此后不再发请求 */ })
+      .then(function(){ live.polling = false; });
+  }
+
+  function startLive(){
+    probe();                            // 先探一次后端，探不到就完全不启用（静态页面零额外请求）
+    setInterval(function(){ if(live.started) probe(); }, 15000);   // 实时模式下的轮询兜底
+  }
+
+  /* ---------- 启动 ---------- */
+  function boot(data){
+    applyData(data, false);
+    bind();
+  }
+
+  // 数据来源：http(s) 下 fetch data.json（本地服务 / 虚拟主机都能用）；
+  // 只有 file:// 打开、或线上拿不到 data.json 时，才退回内联快照
+  function loadInlineSnapshot(){
+    return new Promise(function(resolve){
+      if(window.__DATA__){ resolve(window.__DATA__); return; }
+      var s = document.createElement("script");
+      s.src = "data-inline.js";
+      s.onload = function(){ resolve(window.__DATA__ || null); };
+      s.onerror = function(){ resolve(null); };
+      document.head.appendChild(s);
+    });
+  }
+
+  // 是否探测本地实时服务。publish.py 生成静态发布包时会把下面这行改成 false：
+  // 线上没有本地服务，连探测都不必发，避免每个访客都白打一次 404
+  var LIVE_PROBE = true;
+
+  var canFetch = location.protocol === "http:" || location.protocol === "https:";
+
+  var loader = canFetch
+    ? fetch("data.json", { cache: "no-store" })
+        .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+        .catch(function(){ return null; })
+    : Promise.resolve(null);
+
+  loader.then(function(d){
+    return d ? d : loadInlineSnapshot();
+  }).then(function(d){
+    if(!d){
+      document.getElementById("list").innerHTML =
+        '<div class="empty">未找到数据。请先运行 <b>python spdex_server.py</b> 启动本地服务，' +
+        "或运行 <b>python spdex_fetch.py</b> 生成数据文件。</div>";
+      paintLive();
+      return;
+    }
+    boot(d);
+    if(canFetch && LIVE_PROBE) startLive();
+  });
+})();
+</script>
+</body>
+</html>
