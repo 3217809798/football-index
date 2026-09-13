@@ -1,0 +1,118 @@
+# 竞彩指数页面自动更新
+#   每 15 分钟：抓 spdex 数据 → 生成 dist/ → 用 FTP 覆盖到 90qu.com 子目录
+#   凭据全部来自仓库 Secrets；本地那份带密码的 publish.json 被 .gitignore 挡住，不会进仓库
+#
+# 想改成只在数据变化时上传，把下面 run 里的 --upload 换成 --upload --only-data 即可。
+name: spdex-update
+
+on:
+  schedule:
+    # 注意：GitHub 的 cron 一律按 UTC 计时。
+    # */15 落在 0/15/30/45 分，而北京时间为 UTC+8（480 分钟，正好是 15 的整数倍），
+    # 所以日历上同样是每小时 0/15/30/45 分，无需换算。
+    - cron: "*/15 * * * *"
+  # 允许在 Actions 页面点一下就跑，用来首次验证配置
+  workflow_dispatch:
+
+# 同一时刻只允许一个发布任务；后到的排队而不是取消，避免线上文件被两个任务同时改
+concurrency:
+  group: spdex-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 拉取仓库
+        uses: actions/checkout@v4
+
+      - name: 准备 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # publish.py 需要根目录有 publish.json；这份是现场生成的，不来自仓库
+      - name: 由 Secrets 生成 publish.json
+        env:
+          FTP_MODE: ${{ secrets.FTP_MODE }}
+          FTP_HOST: ${{ secrets.FTP_HOST }}
+          FTP_PORT: ${{ secrets.FTP_PORT }}
+          FTP_USER: ${{ secrets.FTP_USER }}
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+          FTP_REMOTE_DIR: ${{ secrets.FTP_REMOTE_DIR }}
+          FTP_USE_TLS: ${{ secrets.FTP_USE_TLS }}
+        run: python build_publish_conf.py
+
+      # 不用 set -e：要自己拿到退出码再决定成败，避免脚本一失败日志就断在这里
+      - name: 抓取并上传
+        id: publish
+        env:
+          TZ: Asia/Shanghai
+        run: |
+          set +e
+          python publish.py --upload 2>&1 | tee publish.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      # 把结果写进 Job Summary，Actions 页面直接能看，不用点进日志
+      - name: 汇总结果
+        if: always()
+        env:
+          TZ: Asia/Shanghai
+          RC: ${{ steps.publish.outputs.rc }}
+        run: |
+          RESULT=$(grep -E '^RESULT: (OK|FAIL|SKIP)' publish.log | tail -1 || true)
+          [ -n "$RESULT" ] || RESULT="RESULT: UNKNOWN - 日志里没有结果行"
+          {
+            echo "### 竞彩指数自动更新"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "| --- | --- |"
+            echo "| 运行时间 | $(date '+%Y-%m-%d %H:%M:%S %Z') |"
+            echo "| 结束代码 | \`${RC:-未知}\` |"
+            echo "| 结果 | \`$RESULT\` |"
+            echo ""
+            echo "<details><summary>日志末尾 40 行</summary>"
+            echo ""
+            echo '```'
+            tail -40 publish.log
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 失败时留一份日志
+        if: always() && steps.publish.outputs.rc != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: publish-log-${{ github.run_number }}
+          path: publish.log
+          retention-days: 14
+
+      # 退出码含义见 publish.py 文件头：
+      #   0 = 成功；2 = 抓取结果不可用（已保留线上旧数据，下一轮自动重试）
+      #   1 = 配置缺失 / 上传失败 —— 这个才值得把人叫醒
+      - name: 判断是否真的失败
+        if: always()
+        env:
+          RC: ${{ steps.publish.outputs.rc }}
+        run: |
+          case "${RC:-1}" in
+            0)
+              echo "发布成功"
+              ;;
+            2)
+              echo "::warning::本轮抓取结果不可用，已保留线上旧数据，下一轮会自动重试（无需处理）"
+              ;;
+            *)
+              echo "::error::发布失败。多数情况是 FTP 密码/目录变了：先在本地跑 python publish.py --check 定位，再更新 Secrets"
+              exit 1
+              ;;
+          esac
