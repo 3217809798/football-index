@@ -44,6 +44,12 @@ def main():
         print("::error::FTP_MODE 只能是 ftp 或 sftp，当前是 %r" % mode)
         return 1
 
+    # 诊断：打印每个 Secret 实际读到的长度，不打印内容（避免泄漏）
+    for n in ("FTP_MODE", "FTP_HOST", "FTP_PORT", "FTP_USER", "FTP_PASSWORD",
+             "FTP_REMOTE_DIR", "FTP_USE_TLS"):
+        raw = os.environ.get(n)
+        print("Secret %-15s len=%-3s repr=%r" % (n, len(raw or ""), "PRESENT" if raw else "MISSING"))
+
     host = need("FTP_HOST", env("FTP_HOST"))
     user = need("FTP_USER", env("FTP_USER"))
     password = need("FTP_PASSWORD", env("FTP_PASSWORD"))
