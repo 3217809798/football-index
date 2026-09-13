@@ -1,0 +1,29 @@
+# 保活：GitHub 规定「仓库连续 60 天没有提交活动，定时任务会被自动停用」。
+# 本任务每周写一个心跳文件并提交，让仓库保持活跃，主任务就不会被悄悄关掉。
+# 如果你能接受偶尔去 Actions 页面点一下 "Enable workflow" 重新启用，这个文件可以删。
+name: keepalive
+
+on:
+  schedule:
+    - cron: "0 3 * * 1" # 每周一 11:00（北京时间）
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  touch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 写入心跳时间
+        run: TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S %Z' > .keepalive
+
+      - name: 提交
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .keepalive
+          git diff --cached --quiet && echo "内容没变，跳过提交" || git commit -m "chore: keepalive $(date -u '+%Y-%m-%d')"
+          git push
