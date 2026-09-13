@@ -1,0 +1,30 @@
+# ---- 绝不能进仓库的凭据 ----
+# publish.json 里含 FTP 账号密码；CI 里由 GitHub Secrets 现场生成
+publish.json
+
+# ---- 运行时产物，CI 每次都会重新生成 ----
+.publish-fingerprint
+.publish.lock
+logs/
+dist/
+publish.log
+__pycache__/
+*.pyc
+
+# ---- 本地工具目录 ----
+.workbuddy/
+.chrome-profile/
+.venv/
+ref/
+
+# ---- 要提交的文件（备忘，无需取消注释）----
+# index.html         页面本体，build_dist 需要它存在
+# data.json          数据快照，首次运行前的种子数据
+# data-inline.js     file:// 打开时的内联兜底
+# spdex_fetch.py     抓取脚本
+# publish.py         抓取+生成+上传
+# build_publish_conf.py   CI 里由 Secrets 生成 publish.json
+# .github/workflows/spdex-update.yml   主定时任务
+# .github/workflows/keepalive.yml      保活任务（可选）
+# GITHUB-ACTIONS-SETUP.md              操作说明
+# TROUBLESHOOTING.txt                  排障说明
