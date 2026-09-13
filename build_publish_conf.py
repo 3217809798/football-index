@@ -44,11 +44,13 @@ def main():
         print("::error::FTP_MODE 只能是 ftp 或 sftp，当前是 %r" % mode)
         return 1
 
-    # 诊断：打印每个 Secret 实际读到的长度，不打印内容（避免泄漏）
+    # 诊断：打印每个 Secret 实际字节数（不打印内容，避免泄漏）。
+    # 踩过的坑：本机 Git Bash 下 `printf '%s' x | gh secret set --body -` 会把
+    # 字符串截成 1 个字符，肉眼很难看出；保留这段几乎零成本，万一日后又翻车能立刻发现。
     for n in ("FTP_MODE", "FTP_HOST", "FTP_PORT", "FTP_USER", "FTP_PASSWORD",
              "FTP_REMOTE_DIR", "FTP_USE_TLS"):
         raw = os.environ.get(n)
-        print("Secret %-15s len=%-3s repr=%r" % (n, len(raw or ""), "PRESENT" if raw else "MISSING"))
+        print("Secret %-15s len=%-3d" % (n, len(raw or "")))
 
     host = need("FTP_HOST", env("FTP_HOST"))
     user = need("FTP_USER", env("FTP_USER"))
