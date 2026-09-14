@@ -85,6 +85,7 @@ a:hover{color:#c60}
 .btn:hover{border-color:var(--brand);color:var(--brand-d)}
 .stats{margin-left:auto;font-size:12px;color:#8a939e;white-space:nowrap}
 .stats em{font-style:normal;color:var(--brand-d);font-weight:700}
+.stats .stale{color:#d92b2b;font-weight:700}
 
 /* ============ 单场比赛 ============ */
 .match{margin-top:14px}
@@ -467,7 +468,22 @@ table.datatable{
     var totalVol = state.data.matches.reduce(function(s,m){ return s + num(m.total); }, 0);
     document.getElementById("stats").innerHTML =
       "共 <em>" + state.data.matches.length + "</em> 场 · 总成交 <em>" + fmt(totalVol) +
-      "</em> · 数据更新 " + esc(state.data.fetchedAt || "-");
+      "</em> · 数据更新 " + esc(state.data.fetchedAt || "-") + staleMark(state.data.fetchedAt);
+  }
+
+  // 数据时效提示：源站偶尔会返回空列表，此时发布脚本会保留上一份快照而不是上线空页面。
+  // 不标出来的话，用户会以为页面卡住了。超过 90 分钟没刷新就明确告警。
+  function staleMark(fetchedAt){
+    var m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(fetchedAt || "");
+    if(!m) return "";
+    var then = new Date(+m[1], (+m[2]) - 1, +m[3], +m[4], +m[5], 0);
+    var mins = (Date.now() - then.getTime()) / 60000;
+    if(!isFinite(mins) || mins < 90) return "";
+    var span = mins >= 1440
+      ? Math.floor(mins / 1440) + " 天"
+      : Math.floor(mins / 60) + " 小时";
+    return ' <span class="stale" title="源站暂未出数据或本轮发布未成功，页面显示的是上一份快照">'
+         + '· 已 ' + span + '未刷新</span>';
   }
 
   /* ---------- 事件 ---------- */
