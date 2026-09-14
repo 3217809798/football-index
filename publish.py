@@ -493,14 +493,30 @@ def run(args):
         except Exception as exc:
             log("抓取过程异常：%s" % exc)
 
+        # 源站偶尔会返回"期号已切但场次列表为空"的中间态，或海外 IP 被临时限流。
+        # 这种情况干等到下一轮要 15 分钟，页面会长时间停在上一份快照，
+        # 所以先在本地重试几次；仍然拿不到才判定本轮失败。
+        total = 1 + max(0, int(getattr(args, "retry", 2) or 0))
         ok, why = check_data(data_path)
+        attempt = 1
+        while not ok and attempt < total:
+            wait = 40 * attempt
+            log("第 %d/%d 次无有效数据（%s），%d 秒后重试…" % (attempt, total, why, wait))
+            time.sleep(wait)
+            attempt += 1
+            try:
+                spdex_fetch.build(date, data_path)
+            except Exception as exc:
+                log("抓取过程异常（第 %d/%d 次）：%s" % (attempt, total, exc))
+            ok, why = check_data(data_path)
+
         if not ok:
             log("抓取结果不可用（%s）→ 保留上一份数据，本轮不上传" % why)
             if had and os.path.exists(backup):
                 shutil.copy2(backup, data_path)
             log("RESULT: FAIL - fetch unusable, kept previous data")
             return 2
-        log("抓取正常：%s" % why)
+        log("抓取正常：%s%s" % (why, "" if attempt == 1 else "（第 %d 次尝试）" % attempt))
         if os.path.exists(backup):
             os.remove(backup)
 
@@ -561,6 +577,8 @@ def main():
     ap.add_argument("--only-data", action="store_true",
                     help="只上传 data.json（页面文件已就位时日常更新用）")
     ap.add_argument("--no-fetch", action="store_true", help="跳过抓取，用现有 data.json")
+    ap.add_argument("--retry", type=int, default=2,
+                    help="抓取到空数据时的额外重试次数（默认 2，每次间隔递增）")
     ap.add_argument("--force", action="store_true", help="数据没变化也强制上传")
     ap.add_argument("--check", action="store_true",
                     help="只自检 FTP/SFTP 配置（连接+进目录+试写），不上传数据")
