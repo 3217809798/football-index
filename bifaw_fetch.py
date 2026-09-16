@@ -223,6 +223,43 @@ class Bifaw:
         code = self._ocr_engine.classification(png)
         return re.sub(r"[^0-9A-Za-z]", "", code)
 
+    def _confirm_logged_in(self, rounds=6):
+        """提交登录后**回头核实**是不是真的登进去了。
+
+        ⚠️ 不能只看「页面没出现『验证码错误』」：验证码识别错时，站点只是把
+        登录表单重新渲染一遍，文本里并没有那些字眼，于是被误判成「登录通过」，
+        一路走到抓取阶段才发现整页写着「你还没有登陆」——CI 上就这么踩过
+        （OCR='b896' 被判通过，最终 0 场）。
+        判据与 is_logged_in() 保持一致：出现「你还没有登陆」就是没登进去；
+        出现比赛表格就是登进去了。
+        """
+        for _ in range(rounds):
+            try:
+                cur = self.page.url or ""
+            except Exception:
+                cur = ""
+            try:
+                err = self.page.evaluate(
+                    "() => { const e=document.getElementById('ErrMsgWin');"
+                    " return e && e.offsetParent!==null ? e.innerText : ''; }")
+            except Exception:
+                err = ""
+            if err and ("登陆" in err or "登录" in err):
+                return False
+            try:
+                if self.page.query_selector("#abf_match table.oddstable"):
+                    return True
+            except Exception:
+                pass
+            txt = self.body_text()
+            if "你还没有登陆" in txt or "你还没有登录" in txt:
+                return False
+            # 还停在登录页（表单特征词）→ 没登进去
+            if "login.php" in cur or "忘记密码" in txt or "点击刷新" in txt:
+                return False
+            self.page.wait_for_timeout(1000)
+        return True
+
     def login(self, max_round=8):
         log("登录态失效，开始登录（验证码 OCR）…")
         for n in range(1, max_round + 1):
@@ -272,6 +309,10 @@ class Bifaw:
             if "密码错误" in flat or "用户名不存在" in flat or "账号" in flat and "错误" in flat:
                 log("  第%d轮：账号/密码被拒 → %s" % (n, flat[:160]))
                 return False
+            if not self._confirm_logged_in():
+                log("  第%d轮：提交后仍是未登录状态（多半验证码识别错了），重试" % n)
+                self.shot("_bifaw_login_retry")
+                continue
             log("  第%d轮：登录通过（%s）" % (n, flat[:120]))
             self.shot("_bifaw_afterlogin")
             # 站点这时正在自行跳转（页面上是「成功登录,正在跳转页面」）。
