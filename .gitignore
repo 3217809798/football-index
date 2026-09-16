@@ -1,6 +1,11 @@
 # ---- 绝不能进仓库的凭据 ----
 # publish.json 里含 FTP 账号密码；CI 里由 GitHub Secrets 现场生成
 publish.json
+# bifaw_conf.json 里含必发指数网账号密码；CI 里用 Secrets 注入环境变量
+bifaw_conf.json
+
+# ---- 浏览器会话（含 cookie，体积大）----
+bifaw_profile/
 
 # ---- 运行时产物，CI 每次都会重新生成 ----
 .publish-fingerprint
@@ -8,6 +13,7 @@ publish.json
 logs/
 dist/
 publish.log
+*.bak
 __pycache__/
 *.pyc
 
@@ -19,12 +25,15 @@ ref/
 
 # ---- 要提交的文件（备忘，无需取消注释）----
 # index.html         页面本体，build_dist 需要它存在
-# data.json          数据快照，首次运行前的种子数据
-# data-inline.js     file:// 打开时的内联兜底
-# spdex_fetch.py     抓取脚本
+# bifaw.json         竞彩必发数据快照（当前唯一数据源）
+# bifaw-inline.js    file:// 打开时的内联兜底
+# bifaw_fetch.py     抓竞彩必发（登录 + 验证码 OCR）
 # publish.py         抓取+生成+上传
 # build_publish_conf.py   CI 里由 Secrets 生成 publish.json
 # .github/workflows/spdex-update.yml   主定时任务
 # .github/workflows/keepalive.yml      保活任务（可选）
 # GITHUB-ACTIONS-SETUP.md              操作说明
 # TROUBLESHOOTING.txt                  排障说明
+#
+# 以下是已下线源（超级指数）的遗留物，提交与否都不影响流程：
+# data.json / data-inline.js / spdex_fetch.py
