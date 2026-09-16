@@ -13,6 +13,7 @@
 /* ============ 基础 ============ */
 *,*::before,*::after{box-sizing:border-box}
 :root{
+  --navh:64px;              /* 站点导航条高度；小屏改为 0（导航条不再吸顶） */
   /* 原站 c.spdex.com/spdexlehejc 的橙色系 */
   --brand:#ff9900;          /* 主橙：场次标题条 / 分页当前页 */
   --brand-d:#e88a00;        /* 深橙：hover */
@@ -39,6 +40,47 @@ body{
 a{color:#333;text-decoration:none}
 a:hover{color:#c60}
 .wrap{width:986px;margin:0 auto;background:#fff;min-height:100vh;box-shadow:0 0 24px rgba(31,45,61,.08)}
+
+/* ============ 站点导航条 ============
+   照 90qu.com 首页（zibll 主题）复刻：底色 #216d01、白色 15px 菜单、同一个 logo。
+   两点刻意的差异：
+   1) 内层宽度对齐本页正文 986px —— 否则宽屏上 logo 会跑到最左边，
+      与下方白色面板的左边缘对不齐，看起来像两截；
+   2) 小屏（≤760px）收成汉堡菜单并且**不再吸顶**，把竖屏高度让给数据工具条。
+   导航条一改高度，记得同步 :root 的 --navh（工具条与 toast 都靠它避让）。 */
+.sitenav{
+  position:sticky;top:0;z-index:90;
+  background:#216d01;color:#fff;font-size:15px;
+  box-shadow:0 1px 0 rgba(0,0,0,.12),0 2px 8px rgba(0,0,0,.14)
+}
+.sitenav-in{
+  max-width:986px;margin:0 auto;padding:0 12px;height:var(--navh);
+  display:flex;align-items:center;position:relative
+}
+.sn-brand{display:flex;align-items:center;flex:0 0 auto;margin-right:10px}
+.sn-brand img{display:block;height:34px;width:auto}
+.sn-menu{
+  display:flex;align-items:center;gap:2px;flex:1 1 auto;min-width:0;
+  list-style:none;margin:0;padding:0
+}
+.sn-menu a{
+  display:block;padding:15px 10px;line-height:20px;border-radius:4px;
+  color:#fff;font-size:15px;white-space:nowrap;transition:background .15s
+}
+.sn-menu a:hover{background:rgba(255,255,255,.16);color:#fff}
+.sn-menu li.on a{background:rgba(0,0,0,.18);font-weight:700}
+.sn-menu-login{display:none}          /* 仅小屏下拉里出现 */
+.sn-right{display:flex;align-items:center;gap:8px;flex:0 0 auto;margin-left:auto}
+.sn-login{
+  display:block;padding:6px 14px;border:1px solid rgba(255,255,255,.55);
+  border-radius:4px;color:#fff;font-size:13px;white-space:nowrap;transition:.15s
+}
+.sn-login:hover{background:#fff;color:#216d01;border-color:#fff}
+.sn-burger{
+  display:none;width:34px;height:30px;padding:0;cursor:pointer;
+  border:1px solid rgba(255,255,255,.5);border-radius:4px;background:transparent
+}
+.sn-burger span{display:block;width:16px;height:2px;margin:3px auto;border-radius:1px;background:#fff}
 
 /* ============ 顶栏 ============ */
 .nbar{
@@ -69,7 +111,8 @@ a:hover{color:#c60}
 
 /* ============ 工具条 ============ */
 .toolbar{
-  position:sticky;top:0;z-index:60;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  /* top 让出顶部站点导航条的高度（小屏 --navh 为 0，见响应式段） */
+  position:sticky;top:var(--navh,0px);z-index:60;display:flex;align-items:center;gap:10px;flex-wrap:wrap;
   padding:10px 12px;background:rgba(255,255,255,.95);backdrop-filter:blur(6px);
   border-bottom:1px solid #e3e6eb;
 }
@@ -225,7 +268,8 @@ table.datatable{
 .stats.flash{background:#ffeccd}
 
 .toast{
-  position:fixed;left:50%;top:14px;z-index:99;transform:translate(-50%,-18px);
+  /* 避让顶部站点导航条 */
+  position:fixed;left:50%;top:calc(var(--navh,0px) + 14px);z-index:99;transform:translate(-50%,-18px);
   padding:8px 16px;border-radius:8px;background:rgba(28,32,38,.9);color:#fff;
   font-size:12.5px;opacity:0;pointer-events:none;transition:.25s ease;
   box-shadow:0 6px 20px rgba(0,0,0,.18)
@@ -236,6 +280,27 @@ table.datatable{
 @media (max-width:1010px){
   .wrap{width:100%;box-shadow:none}
   .toolbar input[type=search]{width:140px}
+}
+@media (max-width:760px){
+  /* 小屏：导航条改为静态 + 汉堡下拉；--navh 归零，工具条重新贴顶 */
+  :root{--navh:0px}
+  .sitenav{position:static}
+  .sitenav-in{height:54px;gap:0}
+  .sn-brand{margin-right:auto}
+  .sn-brand img{height:28px}
+  .sn-right{margin-left:auto;gap:0}
+  .sn-login{display:none}
+  .sn-burger{display:block}
+  .sn-menu{
+    display:none;position:absolute;left:0;right:0;top:100%;z-index:91;
+    flex-direction:column;align-items:stretch;gap:0;padding:4px 0;
+    background:#1c5d01;box-shadow:0 8px 18px rgba(0,0,0,.25)
+  }
+  .sitenav.open .sn-menu{display:flex}
+  .sn-menu a{padding:12px 16px;border-radius:0;font-size:14px}
+  .sn-menu a:hover{background:rgba(255,255,255,.1)}
+  .sn-menu li.on a{background:rgba(0,0,0,.22)}
+  .sn-menu-login{display:block}
 }
 @media (max-width:640px){
   .nbar{flex-wrap:wrap;height:auto;padding:8px 10px;gap:8px}
@@ -259,6 +324,31 @@ table.datatable{
 </style>
 </head>
 <body>
+
+<!-- 站点导航条：与 90qu.com 首页一致，方便从数据页回到站内其它栏目。
+     菜单项 / 顺序 / 链接与首页 zibll 主题的导航完全对齐，当前页标 on。 -->
+<nav class="sitenav" id="sitenav">
+  <div class="sitenav-in">
+    <a class="sn-brand" href="https://90qu.com/" title="90qu-足球数据网">
+      <img src="https://90qu.com/wp-content/uploads/2023/03/1.png" alt="90qu-足球数据网" />
+    </a>
+    <ul class="sn-menu" id="snMenu">
+      <li><a href="https://90qu.com/archives/category/vip">今日概览</a></li>
+      <li><a href="https://90qu.com/jc/">竞足数据</a></li>
+      <li class="on"><a href="https://90qu.com/football/">必发数据</a></li>
+      <li><a href="https://90qu.com/archives/category/%e6%95%99%e7%a8%8b">数据教程</a></li>
+      <li><a href="https://90qu.com/archives/category/ziyuan">资源下载</a></li>
+      <li class="sn-menu-login"><a href="https://90qu.com/user-sign">登录 / 注册</a></li>
+    </ul>
+    <div class="sn-right">
+      <a class="sn-login" href="https://90qu.com/user-sign">登录 / 注册</a>
+      <button class="sn-burger" id="snBurger" type="button" aria-label="展开菜单" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </div>
+</nav>
+
 <div class="wrap">
 
   <!-- 顶栏 -->
@@ -1104,6 +1194,28 @@ table.datatable{
       // 数据年龄会随时间增长，每分钟重算一次过期提示（只动状态条，不重画列表）
       setInterval(paintStale, 60000);
     });
+})();
+</script>
+
+<!-- 站点导航条：小屏汉堡菜单开合（点空白处收起） -->
+<script>
+(function(){
+  var bar = document.getElementById("sitenav");
+  var btn = document.getElementById("snBurger");
+  if(!bar || !btn) return;
+  function setOpen(open){
+    if(open) bar.classList.add("open"); else bar.classList.remove("open");
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+  btn.addEventListener("click", function(){
+    setOpen(!bar.classList.contains("open"));
+  });
+  document.addEventListener("click", function(e){
+    if(bar.classList.contains("open") && !bar.contains(e.target)) setOpen(false);
+  });
+  document.addEventListener("keydown", function(e){
+    if(e.key === "Escape") setOpen(false);
+  });
 })();
 </script>
 </body>
