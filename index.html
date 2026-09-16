@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>足球指数中心 · 竞彩交易量与超级指数</title>
-<meta name="description" content="竞彩足球指数数据页面，展示每场比赛的指数、交易量、比例、赔付、价位、挂牌指数、欧洲平均、凯利方差等数据。" />
+<title>足球指数中心 · 超级指数与竞彩必发</title>
+<meta name="description" content="竞彩足球指数数据页面：超级指数（c.spdex.com）与竞彩必发（bifaw.com）两个数据源，展示每场比赛的指数、交易量、比例、赔付、价位、挂牌指数、欧洲平均、凯利方差等数据。" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%BD%3C/text%3E%3C/svg%3E" />
 <meta property="og:type" content="website" />
 <meta property="og:title" content="足球指数中心 · 竞彩交易量与超级指数" />
-<meta property="og:description" content="竞彩足球必发交易量、比例、赔付、价位、挂牌指数、欧洲平均、凯利方差与大小球指数。" />
+<meta property="og:description" content="竞彩足球交易量、比例、赔付、价位、挂牌指数、欧洲平均、凯利方差与大小球指数。" />
 <style>
 /* ============ 基础 ============ */
 *,*::before,*::after{box-sizing:border-box}
@@ -85,7 +85,28 @@ a:hover{color:#c60}
 .btn:hover{border-color:var(--brand);color:var(--brand-d)}
 .stats{margin-left:auto;font-size:12px;color:#8a939e;white-space:nowrap}
 .stats em{font-style:normal;color:var(--brand-d);font-weight:700}
-.stats .stale{color:#d92b2b;font-weight:700}
+/* 数据新鲜度标记：抓取时间距今多久 */
+.stats .age{display:inline-block;margin-left:2px;padding:0 6px;border-radius:3px;
+  background:#eef1f5;color:#7d8794;font-weight:700}
+.stats .age.warn{background:#fff3da;color:#a06a2c}
+.stats .age.bad{background:#fdecec;color:#c0392b}
+
+/* ============ 数据过期提示条 ============
+   放进 sticky 工具条里独占一行，滚动时始终可见 —— 目的就是别再让人
+   以为屏幕上这份「几天前的数据」是最新的。 */
+.stalebar{
+  flex:1 1 100%;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  border:1px solid #e8c07a;background:#fff8e6;color:#7a5a12;
+  border-radius:5px;padding:7px 10px;font-size:12.5px;line-height:1.55
+}
+.stalebar.bad{border-color:#e2948f;background:#fdecec;color:#a12a26}
+.stalebar b{font-weight:800}
+.stalebar button{
+  font:inherit;font-size:12px;font-weight:700;cursor:pointer;
+  border:1px solid currentColor;background:transparent;color:inherit;
+  border-radius:4px;padding:2px 9px
+}
+.stalebar button:hover{background:rgba(0,0,0,.06)}
 
 /* ============ 单场比赛 ============ */
 .match{margin-top:14px}
@@ -222,6 +243,19 @@ table.datatable{
   .stats{margin-left:0;flex-basis:100%}
   .live{margin-left:auto}
 }
+
+/* ============ 竞彩必发（bifaw）专用 ============ */
+.datatable th.itemcol{width:52px}
+.datatable td.itemcell{
+  width:52px;text-align:center;font-weight:700;color:var(--ink)
+}
+.datatable td.itemcell.ou{color:#2f6b1e}
+.datatable td.pctv{font-weight:700;color:#7a5a12}
+.datatable tbody tr.ou-sep td{
+  background:#fff7ea;color:#a06a2c;font-size:12px;text-align:left;
+  padding-left:10px;height:24px
+}
+.datatable tbody tr.ou-sep:hover td{background:#fff7ea}
 </style>
 </head>
 <body>
@@ -229,9 +263,13 @@ table.datatable{
 
   <!-- 顶栏 -->
   <div class="nbar">
-    <div class="door">
-      <label for="dropJc">竞彩期刊：</label>
+    <div class="door" id="jcwrap">
+      <label for="dropJc">竞彩期号：</label>
       <select id="dropJc"></select>
+    </div>
+    <div class="door">
+      <label for="source">数据来源：</label>
+      <select id="source"></select>
     </div>
     <div class="ticker" id="ticker"><div class="ticker-track" id="tickerTrack"></div></div>
     <div class="live" id="live" title="自动刷新状态">
@@ -256,6 +294,8 @@ table.datatable{
     </select>
     <button class="btn" id="toggleAll" type="button">全部折叠</button>
     <div class="stats" id="stats"></div>
+    <!-- 数据过期提示条（仅在当前源明显过期时出现，见 paintStale） -->
+    <div class="stalebar" id="stalebar" style="display:none"></div>
   </div>
 
   <!-- 比赛列表 -->
@@ -275,13 +315,21 @@ table.datatable{
   "use strict";
 
   var PER_PAGE = 8;
-  var state = { data:null, page:1, q:"", sort:"no", allCollapsed:false, collapsed:{} };
+
+  /* 数据源：spdex（超级指数）/ bifaw（竞彩必发）。
+     两者表结构与字段语义完全不同，所以走「适配器」：每个源把原始 JSON
+     翻译成外壳认识的统一形态，搜索 / 排序 / 折叠 / 分页 / 状态条 / 播报
+     全部共用，不必为第二个源再写一套交互。 */
+  var state = {
+    src:"spdex", cache:{}, page:1, q:"", sort:"no",
+    allCollapsed:false, collapsed:{}, booting:false
+  };
 
   /* 常见球队简称 → 全称，便于用「曼联」搜到「曼彻斯特联」 */
   var ALIAS = {
     "曼联":"曼彻斯特联", "曼城":"曼彻斯特城", "红魔":"曼彻斯特联", "蓝月亮":"曼彻斯特城",
     "皇马":"皇家马德里", "马竞":"马德里竞技", "巴萨":"巴塞罗那", "拜仁":"拜仁慕尼黑",
-    "尤文":"尤文图斯", "国米":"国际米兰", "巴黎":"巴黎圣日尔曼", "大巴黎":"巴黎圣日尔曼",
+    "尤文":"尤文图斯", "国米":"国际米兰", "巴黎":"巴黎日尔曼", "大巴黎":"巴黎日尔曼",
     "枪手":"阿森纳", "热刺":"托特纳姆热刺", "红军":"利物浦", "蓝军":"切尔西",
     "多特":"多特蒙德", "药厂":"勒沃库森", "米兰":"AC米兰"
   };
@@ -293,23 +341,6 @@ table.datatable{
     });
     return map;
   })();
-
-  function searchKey(m){
-    var extra = [];
-    [m.home, m.away].forEach(function(t){
-      (ALIAS_BY_TEAM[t] || []).forEach(function(a){ extra.push(a); });
-    });
-    return (m.title + " " + m.home + " " + m.away + " " + m.kickoff + " " + extra.join(" ")).toLowerCase();
-  }
-  /* 子序列匹配：「曼联」是「曼彻斯特联」的子序列，容错更高 */
-  function subseq(q, s){
-    if(!s) return false;
-    var i = 0;
-    for(var j = 0; j < s.length && i < q.length; j++){
-      if(s.charAt(j) === q.charAt(i)) i++;
-    }
-    return i >= q.length;
-  }
 
   /* ---------- 工具函数 ---------- */
   function esc(s){
@@ -324,10 +355,52 @@ table.datatable{
   function fmt(n){ return n.toLocaleString("en-US"); }
   function kickoffTs(s){
     var m = String(s||"").match(/(\d{4})\D(\d{1,2})\D(\d{1,2})\D+(\d{1,2}):(\d{2})/);
+    if(m) return +new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5]);
+    m = String(s||"").match(/(\d{1,2})\D(\d{1,2})\D+(\d{1,2}):(\d{2})/);   // "09-16 18:00"
     if(!m) return 0;
-    return +new Date(+m[1], +m[2]-1, +m[3], +m[4], +m[5]);
+    return +new Date(new Date().getFullYear(), +m[1]-1, +m[2], +m[3], +m[4]);
   }
-  function signCls(v){ // 正 → 红，负 → 绿
+
+  /* ---------- 数据新鲜度 ----------
+     抓取脚本的「绝不用坏数据覆盖好数据」是把双刃剑：源站挂了会一直保留上一份，
+     页面却看不出这份数据是三天前的。所以这里统一算「抓取时间距今多久」，
+     并在过期时把提示摆到明面上。 */
+  function parseTs(s){
+    if(!s) return 0;
+    var t = Date.parse(String(s).replace(/-/g,"/").replace("T"," ").replace(/\..*$/,""));
+    return isNaN(t) ? 0 : t;
+  }
+  function ageText(ms){
+    if(ms < 0) ms = 0;
+    var m = Math.floor(ms/60000);
+    if(m < 1) return "刚刚";
+    if(m < 60) return m + " 分钟前";
+    var h = Math.floor(m/60);
+    if(h < 24) return h + " 小时前";
+    var d = Math.floor(h/24);
+    return d + " 天" + (h % 24 ? " " + (h % 24) + " 小时" : "") + "前";
+  }
+  var STALE_WARN = 3*3600*1000;    // 超过 3 小时：黄色提醒
+  var STALE_BAD  = 12*3600*1000;   // 超过 12 小时：红色告警
+  function freshness(view){
+    var ts = parseTs(view && view.fetchedAt);
+    if(!ts) return {ts:0, age:0, text:"", level:""};
+    var age = Date.now() - ts;
+    return {ts:ts, age:age, text:ageText(age),
+            level: age > STALE_BAD ? "bad" : (age > STALE_WARN ? "warn" : "")};
+  }
+  /* 两份数据里抓取时间最新的那个（都不可用时返回 null） */
+  function fresherKey(){
+    var best = null, bt = -1;
+    SRC_KEYS.forEach(function(k){
+      var v = state.cache[k];
+      if(!v) return;
+      var ts = parseTs(v.fetchedAt);
+      if(ts > bt){ bt = ts; best = k; }
+    });
+    return best;
+  }
+  function signCls(v){ // 正 → 红，负 → 绿（国内习惯）
     var n = num(v);
     if(n > 0) return "up";
     if(n < 0) return "down";
@@ -338,88 +411,262 @@ table.datatable{
     return '<td class="pct' + (isOU ? " ou" : "") + '">' +
              '<i style="width:' + n + '%"></i><span>' + esc(v) + "</span></td>";
   }
+  /* 子序列匹配：「曼联」是「曼彻斯特联」的子序列，容错更高 */
+  function subseq(q, s){
+    if(!s) return false;
+    var i = 0;
+    for(var j = 0; j < s.length && i < q.length; j++){
+      if(s.charAt(j) === q.charAt(i)) i++;
+    }
+    return i >= q.length;
+  }
+  function searchKey(it){
+    var extra = [];
+    [it.home, it.away].forEach(function(t){
+      (ALIAS_BY_TEAM[t] || []).forEach(function(a){ extra.push(a); });
+    });
+    return (it.title + " " + it.home + " " + it.away + " " + it.kickoff + " " +
+            extra.join(" ")).toLowerCase();
+  }
+  const topN = (arr, n, key) => arr.sort((a,b) => num(b[key]) - num(a[key])).slice(0, n);
+
+  /* ================= 适配器 ================= */
+  var ADAPTERS = {
+
+    /* ---------------- 超级指数（c.spdex.com/spdexlehejc） ---------------- */
+    spdex: {
+      name: "超级指数",
+      enabled: false,      // ⛔ 源站已改成会员登录站（2026-09-16 下线），见 SRC_KEYS 注释
+      file: "data.json",
+      inlineKey: "__DATA__",
+      inlineFile: "data-inline.js",
+      volLabel: "总成交",
+      emptyTip: '没有 spdex 数据。请先运行 <b>python spdex_fetch.py</b> 生成 data.json。',
+
+      build: function(d){
+        var cols = (d.columns || []).map(function(c){
+          var cls = c === "球队队名" ? "teamname" : (/交易量/.test(c) ? "long" : "");
+          return "<th" + (cls ? ' class="' + cls + '"' : "") + ">" + esc(c) + "</th>";
+        }).join("");
+
+        function rowHtml(r){
+          var nameCell = r.name
+            ? '<td class="teamname">' + esc(r.name) + "</td>"
+            : '<td class="teamname"><span class="draw-tag">平局</span></td>';
+          return "<tr>" + nameCell +
+            "<td>" + esc(r.idx) + "</td>" +
+            '<td class="long">' + esc(r.vol) + "</td>" +
+            pctCell(r.pct, false) +
+            '<td class="' + signCls(r.pay) + '">' + esc(r.pay) + "</td>" +
+            "<td>" + esc(r.price) + "</td>" +
+            '<td class="' + signCls(r.listed) + '">' + esc(r.listed) + "</td>" +
+            "<td>" + esc(r.euro) + "</td>" +
+            "<td>" + esc(r.kelly) + "</td>" +
+            '<td class="long">' + esc(r.ouVol) + "</td>" +
+            (r.ouPct ? pctCell(r.ouPct, true) : "<td></td>") +
+            "<td>" + esc(r.ouPrice) + "</td>" +
+            "<td>" + esc(r.ouIdx) + "</td>" +
+          "</tr>";
+        }
+
+        var items = (d.matches || []).map(function(m){
+          return {
+            id: m.id,
+            title: m.title,
+            home: m.home, away: m.away, kickoff: m.kickoff,
+            total: m.total, updateTime: m.updateTime,
+            volNum: num(m.total),
+            hpctNum: num(m.rows && m.rows[0] && m.rows[0].pct),
+            tableHtml: '<table class="datatable">' +
+              "<thead><tr>" + cols + "</tr></thead>" +
+              "<tbody>" + (m.rows || []).map(rowHtml).join("") + "</tbody>" +
+            "</table>"
+          };
+        });
+
+        // 播报：全部场次按单项交易量取 Top6
+        var tops = [];
+        (d.matches || []).forEach(function(m){
+          (m.rows || []).forEach(function(r, i){
+            if(!r.vol) return;
+            tops.push({
+              match: m.home + " VS " + m.away,
+              side: i === 0 ? "主胜" : (i === 2 ? "客胜" : "平局"),
+              vol: r.vol, price: r.price, time: m.updateTime
+            });
+          });
+        });
+        var bits = topN(tops, 6, "vol").map(function(t){
+          return "<b>比赛</b>:" + esc(t.match) + " 市场:标准盘 " + esc(t.side) +
+                 ":<u>" + esc(t.vol) + "</u> 价位:" + esc(t.price) + " 时间:" + esc(t.time);
+        });
+
+        var totalVol = (d.matches || []).reduce(function(s,m){ return s + num(m.total); }, 0);
+        return {
+          label: d.date + " 期",
+          docTitle: d.date + " 期 · 足球指数中心",
+          dataDate: d.date,
+          items: items,
+          tickerPrefix: "必发交易所交易量 Top6",
+          tickerBits: bits,
+          fetchedAt: d.fetchedAt || "",
+          statsHtml: "共 <em>" + items.length + "</em> 场 · 总成交 <em>" +
+                     fmt(totalVol) + "</em> · 数据更新 " + esc(d.fetchedAt || "-")
+        };
+      }
+    },
+
+    /* ---------------- 竞彩必发（bifaw.com/bifaw/sporttery.php） ---------------- */
+    bifaw: {
+      name: "竞彩必发",
+      enabled: true,
+      file: "bifaw.json",
+      inlineKey: "__BIFAW__",
+      inlineFile: "bifaw-inline.js",
+      volLabel: "总成交量",
+      emptyTip: '没有竞彩必发数据。请先运行 <b>python bifaw_fetch.py</b> 生成 bifaw.json。',
+
+      build: function(d){
+        var cols = '<th class="itemcol">项</th>' + (d.columns || []).map(function(c){
+          return "<th>" + esc(c) + "</th>";
+        }).join("");
+        var PRO = (d.columns || []).indexOf("盈亏");
+        var PCT = (d.columns || []).indexOf("比例");
+
+        function rowHtml(r, isOU){
+          var tds = (r.v || []).map(function(v, i){
+            var k = "";
+            if(i === PRO) k = signCls(v);
+            else if(i === PCT && !isOU) k = "pctv";
+            return "<td" + (k ? ' class="' + k + '"' : "") + ">" + esc(v) + "</td>";
+          }).join("");
+          return "<tr>" +
+            '<td class="teamname itemcell' + (isOU ? " ou" : "") + '">' +
+              esc(r.item) + "</td>" + tds +
+          "</tr>";
+        }
+
+        var items = (d.matches || []).map(function(m){
+          var body = (m.rows || []).map(function(r){ return rowHtml(r, false); }).join("");
+          if((m.ou || []).length){
+            body += '<tr class="ou-sep"><td colspan="15">' +
+                      (m.ouLine ? "大小球 " + esc(m.ouLine) : "大小球") +
+                      (m.ouTotal ? "　总成交量 " + esc(m.ouTotal) : "") +
+                    "</td></tr>";
+            body += (m.ou || []).map(function(r){ return rowHtml(r, true); }).join("");
+          }
+          return {
+            id: m.id,
+            title: (m.leagueText || m.league || "") +
+                   (m.home ? "　" + m.home + " VS " + m.away : ""),
+            home: m.home, away: m.away, kickoff: m.kickoff,
+            total: m.total, updateTime: d.fetchedAt,
+            volNum: num(m.total),
+            hpctNum: num(m.rows && m.rows[0] && m.rows[0].v && m.rows[0].v[PCT]),
+            tableHtml: '<table class="datatable">' +
+              "<thead><tr>" + cols + "</tr></thead>" +
+              "<tbody>" + body + "</tbody>" +
+            "</table>"
+          };
+        });
+
+        // 播报：用「成交量」列（COLUMNS 里的下标 3）
+        var VOLC = (d.columns || []).indexOf("成交量");
+        var PRICEC = (d.columns || []).indexOf("价位");
+        var tops = [];
+        (d.matches || []).forEach(function(m){
+          (m.rows || []).forEach(function(r){
+            var v = r.v || [];
+            if(!v[VOLC]) return;
+            tops.push({
+              match: m.home + " VS " + m.away,
+              side: r.item === "主" ? "主胜" : (r.item === "客" ? "客胜" : "和局"),
+              vol: v[VOLC], price: v[PRICEC], time: d.fetchedAt
+            });
+          });
+        });
+        var bits = topN(tops, 6, "vol").map(function(t){
+          return "<b>比赛</b>:" + esc(t.match) + " 市场:竞彩必发 " + esc(t.side) +
+                 ":<u>" + esc(t.vol) + "</u> 价位:" + esc(t.price) + " 时间:" + esc(t.time);
+        });
+
+        var totalVol = (d.matches || []).reduce(function(s,m){ return s + num(m.total); }, 0);
+        return {
+          label: "竞彩必发",
+          docTitle: "竞彩必发 · 足球指数中心",
+          dataDate: String(d.fetchedAt || "").slice(0, 10),
+          items: items,
+          tickerPrefix: "竞彩必发成交量 Top6",
+          tickerBits: bits,
+          fetchedAt: d.fetchedAt || "",
+          statsHtml: "共 <em>" + items.length + "</em> 场 · 总成交量 <em>" +
+                     fmt(totalVol) + "</em> · 数据更新 " + esc(d.fetchedAt || "-")
+        };
+      }
+    }
+  };
+
+  /* ---------- 启用中的数据源 ----------
+     ⛔ 超级指数（c.spdex.com）已于 2026-09-16 下线：源站整体改成会员登录站，
+        老页面没了，抓取每轮「一场都没抓到」。适配器代码保留着（enabled:false），
+        以后拿到账号要恢复，把它的 enabled 改成 true 即可，别的都不用动。
+     下拉选项、启动加载、默认源选择、过期提示的「另一源」比较，全部由这份清单驱动，
+     所以下线/恢复一个源只需要改这一个地方。 */
+  var SRC_KEYS = Object.keys(ADAPTERS).filter(function(k){
+    return ADAPTERS[k].enabled !== false;
+  });
+
+  function buildSourceOptions(){
+    var sel = document.getElementById("source");
+    if(!sel) return;
+    sel.innerHTML = SRC_KEYS.map(function(k){
+      return '<option value="' + esc(k) + '">' + esc(ADAPTERS[k].name) + "</option>";
+    }).join("");
+  }
 
   /* ---------- 渲染：交易播报 ---------- */
-  function renderTicker(matches){
-    var tops = [];
-    matches.forEach(function(m){
-      (m.rows || []).forEach(function(r, i){
-        if(!r.vol) return;
-        tops.push({
-          match: m.home + " VS " + m.away,
-          side: i === 0 ? "主胜" : (i === 2 ? "客胜" : "平局"),
-          vol: r.vol, price: r.price, time: m.updateTime
-        });
-      });
-    });
-    tops.sort(function(a,b){ return num(b.vol) - num(a.vol); });
-    tops = tops.slice(0, 6);
+  function renderTicker(view){
     var tk = document.getElementById("ticker");
-    if(!tops.length){ tk.style.display = "none"; return; }
+    if(!view || !view.tickerBits || !view.tickerBits.length){
+      tk.style.display = "none";
+      return;
+    }
     tk.style.display = "";
-
-    var one = tops.map(function(t){
-      return "<b>比赛</b>:" + esc(t.match) + " 市场:标准盘 " + esc(t.side) + ":<u>" +
-             esc(t.vol) + "</u> 价位:" + esc(t.price) + " 时间:" + esc(t.time);
-    }).join(" --- ");
-
-    var html = '<span style="color:#3300ff"><strong>竞彩指数快报</strong></span> --- 必发交易所交易量 Top6：' + one + " --- ";
-    document.getElementById("tickerTrack").innerHTML = html + html; // 复制一份实现无缝循环
+    var head = '<span style="color:#3300ff"><strong>竞彩指数快报</strong></span> --- ' +
+               view.tickerPrefix + "：" + view.tickerBits.join(" --- ") + " --- ";
+    document.getElementById("tickerTrack").innerHTML = head + head;   // 复制一份实现无缝循环
   }
 
   /* ---------- 渲染：单场比赛 ---------- */
-  function rowHtml(r){
-    var nameCell = r.name
-      ? '<td class="teamname">' + esc(r.name) + "</td>"
-      : '<td class="teamname"><span class="draw-tag">平局</span></td>';
-
-    return "<tr>" + nameCell +
-      "<td>" + esc(r.idx) + "</td>" +
-      '<td class="long">' + esc(r.vol) + "</td>" +
-      pctCell(r.pct, false) +
-      '<td class="' + signCls(r.pay) + '">' + esc(r.pay) + "</td>" +
-      "<td>" + esc(r.price) + "</td>" +
-      '<td class="' + signCls(r.listed) + '">' + esc(r.listed) + "</td>" +
-      "<td>" + esc(r.euro) + "</td>" +
-      "<td>" + esc(r.kelly) + "</td>" +
-      '<td class="long">' + esc(r.ouVol) + "</td>" +
-      (r.ouPct ? pctCell(r.ouPct, true) : "<td></td>") +
-      "<td>" + esc(r.ouPrice) + "</td>" +
-      "<td>" + esc(r.ouIdx) + "</td>" +
-    "</tr>";
-  }
-
-  function matchHtml(m, idx){
-    var cols = (state.data.columns || []).map(function(c){
-      var cls = c === "球队队名" ? "teamname" : (/交易量/.test(c) ? "long" : "");
-      return "<th" + (cls ? ' class="' + cls + '"' : "") + ">" + esc(c) + "</th>";
-    }).join("");
-
-    // 折叠状态按场次 id 记忆在 state.collapsed 里，自动刷新重渲染后不会丢
-    var isC = !!state.collapsed[m.id];
-    return '<div class="match' + (isC ? " collapsed" : "") + '" data-id="' + esc(m.id) + '">' +
+  function matchHtml(it){
+    var isC = !!state.collapsed[it.id];
+    return '<div class="match' + (isC ? " collapsed" : "") + '" data-id="' + esc(it.id) + '">' +
       '<div class="datatitle" role="button" tabindex="0" aria-expanded="' + (isC ? "false" : "true") + '">' +
-        "<h3>" + esc(m.title) + "</h3>" +
-        '<span class="matchtime">开赛时间：' + esc(m.kickoff) + "</span>" +
+        "<h3>" + esc(it.title) + "</h3>" +
+        '<span class="matchtime">开赛时间：' + esc(it.kickoff || "-") + "</span>" +
       "</div>" +
       '<div class="viewer"><div>' +
-        '<div class="tablescroll"><table class="datatable">' +
-          "<thead><tr>" + cols + "</tr></thead>" +
-          "<tbody>" + (m.rows || []).map(rowHtml).join("") + "</tbody>" +
-        "</table></div>" +
+        '<div class="tablescroll">' + it.tableHtml + "</div>" +
         '<div class="dataline">' +
-          '<span class="cj">交易量总成交：' + esc(m.total || "-") + "</span>" +
-          '<span class="dltime">更新时间：' + esc(m.updateTime || "-") + "</span>" +
+          '<span class="cj">' + esc(ADAPTERS[state.src].volLabel) + "：" +
+             esc(it.total || "-") + "</span>" +
+          '<span class="dltime">更新时间：' + esc(it.updateTime || "-") + "</span>" +
         "</div>" +
       "</div></div>" +
     "</div>";
   }
 
   /* ---------- 渲染：分页 ---------- */
-  function renderPager(total, pages){
+  function renderPager(total, pages, label){
     var el = document.getElementById("pager");
-    if(pages <= 1){ el.innerHTML = total ? '<span class="info">共 ' + total + " 场</span>" : ""; return; }
-    var p = state.page, html = '<span class="info">第 ' + p + " 页，共 " + pages + " 页（" + total + " 场）</span>";
+    if(pages <= 1){
+      el.innerHTML = total
+        ? '<span class="info">' + esc(label || "") + " 共 " + total + " 场</span>" : "";
+      return;
+    }
+    var p = state.page;
+    var html = '<span class="info">' + esc(label || "") + " 第 " + p + " 页，共 " + pages +
+               " 页（" + total + " 场）</span>";
     html += '<a class="' + (p === 1 ? "disabled" : "") + '" data-p="1">&laquo;</a>';
     html += '<a class="' + (p === 1 ? "disabled" : "") + '" data-p="' + (p-1) + '">&lsaquo;</a>';
     for(var i = 1; i <= pages; i++){
@@ -431,27 +678,34 @@ table.datatable{
   }
 
   /* ---------- 主渲染 ---------- */
+  function currentView(){ return state.cache[state.src]; }
+
   function render(){
-    var rows = state.data.matches.slice();
+    var view = currentView();
+    if(!view){
+      document.getElementById("list").innerHTML =
+        '<div class="empty">' + ADAPTERS[state.src].emptyTip + "</div>";
+      document.getElementById("pager").innerHTML = "";
+      document.getElementById("stats").innerHTML = "等待数据…";
+      return;
+    }
+    var rows = view.items.slice();
 
     // 搜索：全称/简称/子串/子序列 均可命中
     if(state.q){
       var q = state.q.toLowerCase();
-      rows = rows.filter(function(m){
-        var key = m.__key || (m.__key = searchKey(m));
-        return key.indexOf(q) > -1 || subseq(q, m.home) || subseq(q, m.away);
+      rows = rows.filter(function(it){
+        var key = it.__key || (it.__key = searchKey(it));
+        return key.indexOf(q) > -1 || subseq(q, it.home) || subseq(q, it.away);
       });
     }
     // 排序
     if(state.sort === "time"){
       rows.sort(function(a,b){ return kickoffTs(a.kickoff) - kickoffTs(b.kickoff); });
     }else if(state.sort === "total"){
-      rows.sort(function(a,b){ return num(b.total) - num(a.total); });
+      rows.sort(function(a,b){ return b.volNum - a.volNum; });
     }else if(state.sort === "hpct"){
-      rows.sort(function(a,b){
-        var x = num(a.rows[0] && a.rows[0].pct), y = num(b.rows[0] && b.rows[0].pct);
-        return y - x;
-      });
+      rows.sort(function(a,b){ return b.hpctNum - a.hpctNum; });
     }
 
     var pages = Math.max(1, Math.ceil(rows.length / PER_PAGE));
@@ -462,28 +716,13 @@ table.datatable{
       ? slice.map(matchHtml).join("")
       : '<div class="empty">没有匹配的比赛，换个关键词试试。</div>';
 
-    renderPager(rows.length, pages);
-
-    // 统计
-    var totalVol = state.data.matches.reduce(function(s,m){ return s + num(m.total); }, 0);
-    document.getElementById("stats").innerHTML =
-      "共 <em>" + state.data.matches.length + "</em> 场 · 总成交 <em>" + fmt(totalVol) +
-      "</em> · 数据更新 " + esc(state.data.fetchedAt || "-") + staleMark(state.data.fetchedAt);
-  }
-
-  // 数据时效提示：源站偶尔会返回空列表，此时发布脚本会保留上一份快照而不是上线空页面。
-  // 不标出来的话，用户会以为页面卡住了。超过 90 分钟没刷新就明确告警。
-  function staleMark(fetchedAt){
-    var m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/.exec(fetchedAt || "");
-    if(!m) return "";
-    var then = new Date(+m[1], (+m[2]) - 1, +m[3], +m[4], +m[5], 0);
-    var mins = (Date.now() - then.getTime()) / 60000;
-    if(!isFinite(mins) || mins < 90) return "";
-    var span = mins >= 1440
-      ? Math.floor(mins / 1440) + " 天"
-      : Math.floor(mins / 60) + " 小时";
-    return ' <span class="stale" title="源站暂未出数据或本轮发布未成功，页面显示的是上一份快照">'
-         + '· 已 ' + span + '未刷新</span>';
+    renderPager(rows.length, pages, view.label);
+    var fr = freshness(view), extra = "";
+    if(fr.text){
+      extra = ' · <span class="age ' + fr.level + '" title="抓取时间 ' + esc(view.fetchedAt) + '">' +
+              esc((fr.level === "bad" ? "数据已过期 · " : "") + fr.text) + "</span>";
+    }
+    document.getElementById("stats").innerHTML = view.statsHtml + extra;
   }
 
   /* ---------- 事件 ---------- */
@@ -499,17 +738,30 @@ table.datatable{
       state.sort = e.target.value; state.page = 1; render();
     });
 
+    document.getElementById("source").addEventListener("change", function(e){
+      switchSource(e.target.value, true);
+    });
+
+    // 数据过期提示条上的「切过去看」
+    var bar = document.getElementById("stalebar");
+    if(bar){
+      bar.addEventListener("click", function(e){
+        var b = e.target.closest("button[data-goto]");
+        if(b) switchSource(b.getAttribute("data-goto"), true);
+      });
+    }
+
     document.getElementById("toggleAll").addEventListener("click", function(e){
       state.allCollapsed = !state.allCollapsed;
       e.target.textContent = state.allCollapsed ? "全部展开" : "全部折叠";
-      // 逐场写入折叠表，这样自动刷新后展开/收起状态依然保持
-      (state.data.matches || []).forEach(function(m){
-        state.collapsed[m.id] = state.allCollapsed;
+      var view = currentView();
+      ((view && view.items) || []).forEach(function(it){
+        state.collapsed[it.id] = state.allCollapsed;
       });
       render();
     });
 
-    // 手动触发一次抓取
+    // 手动触发一次抓取（仅本地服务模式可用）
     document.getElementById("liveBtn").addEventListener("click", function(){
       var b = this;
       b.disabled = true;
@@ -545,7 +797,7 @@ table.datatable{
     });
   }
 
-  /* ---------- 应用一份数据（首屏与自动刷新共用同一个入口） ---------- */
+  /* ---------- 提示 ---------- */
   function flashStats(){
     var el = document.getElementById("stats");
     if(!el) return;
@@ -563,22 +815,162 @@ table.datatable{
     toastTimer = setTimeout(function(){ el.classList.remove("show"); }, 2800);
   }
 
-  function applyData(d, announce){
-    var dateChanged = !state.data || state.data.date !== d.date;
-    state.data = d;
+  /* ---------- 切换数据源 ---------- */
+  var LS_SRC = "spdex_src_pref";       // 记住用户手动选的源
 
-    // 期刊下拉（服务模式下只有当前期）
-    var sel = document.getElementById("dropJc");
-    sel.innerHTML = '<option value="' + esc(d.date) + '">' + esc(d.date) + "</option>";
-    sel.disabled = true;
-    document.title = d.date + " 期 · 足球指数中心";
+  function switchSource(key, announce){
+    if(!ADAPTERS[key]) return;
+    var changed = state.src !== key;
+    state.src = key;
+    var sel = document.getElementById("source");
+    if(sel) sel.value = key;
+    if(changed) state.page = 1;
+    if(state.cache[key]){
+      paintSource();
+      render();
+      flashStats();
+      paintLive();
+      if(announce) toast("已切换到 " + ADAPTERS[key].name);
+    }else{
+      loadSource(key, announce);
+    }
+    // 只记住「用户自己点出来的」选择；启动时的自动选择不算
+    if(announce){
+      try{ localStorage.setItem(LS_SRC, key); }catch(e){}
+    }
+  }
 
-    renderTicker(d.matches);
-    if(dateChanged) state.page = 1;
+  /* 首屏该显示哪个源：
+     1) 用户上次手动选过的、且数据没过期的那个；
+     2) 否则默认清单里的第一个源（也就是主源）；
+     3) 主源没数据或已过期 —— 例如源站改版停更 —— 才自动落到抓取时间最新的那份。
+     不写死某个源的原因：源站一停更，首屏就会一直摆着几天前的旧数据而无人察觉。 */
+  function defaultSourceKey(){
+    var PREF = SRC_KEYS[0];
+    if(!PREF) return null;
+    try{
+      var saved = localStorage.getItem(LS_SRC);
+      if(saved && SRC_KEYS.indexOf(saved) > -1 && state.cache[saved] &&
+         freshness(state.cache[saved]).level !== "bad") return saved;
+    }catch(e){}
+    var v = state.cache[PREF];
+    if(v && freshness(v).level !== "bad") return PREF;
+    return fresherKey() || PREF;
+  }
+
+  function paintSource(){
+    var view = state.cache[state.src];
+    // 竞彩必发没有「期号」概念，切开时隐藏期号下拉
+    var wrap = document.getElementById("jcwrap");
+    if(wrap) wrap.style.display = state.src === "spdex" ? "" : "none";
+    if(view){
+      document.title = view.docTitle;
+      document.getElementById("dropJc").innerHTML =
+        '<option value="1">' + esc(view.label) + "</option>";
+      renderTicker(view);
+    }
+    paintStale();
+    refreshSourceOptions();
+  }
+
+  /* ---------- 数据过期提示 ----------
+     当前源的数据明显过期时，把「抓的是什么时候的、更新的在哪一份」讲清楚，
+     并给一个直接切过去的按钮。 */
+  function paintStale(){
+    var bar = document.getElementById("stalebar");
+    if(!bar) return;
+    var view = currentView();
+    var fr = freshness(view);
+    if(!fr.level){                                  // 当前源足够新，不打扰
+      bar.style.display = "none";
+      return;
+    }
+    // 在「启用中的」其它源里找有没有更新的（已下线的源不参与比较）
+    var otherKey = null, ofr = {ts: 0};
+    SRC_KEYS.forEach(function(k){
+      if(k === state.src) return;
+      var o = state.cache[k];
+      if(!o) return;
+      var f = freshness(o);
+      if(f.ts > ofr.ts){ ofr = f; otherKey = k; }
+    });
+    var other = otherKey ? state.cache[otherKey] : null;
+
+    var msg = ADAPTERS[state.src].name + " 的数据抓取于 " +
+              ((view && view.fetchedAt) || "未知时间") + "（" + fr.text + "）";
+    if(view && view.dataDate) msg += "，期号 " + view.dataDate;
+    msg += "，可能已经过期。";
+
+    var btn = "";
+    if(other && ofr.ts > fr.ts){
+      msg += " 更新的数据在 " + ADAPTERS[otherKey].name + "（" +
+             (other.fetchedAt || "") + "）。";
+      btn = '<button type="button" data-goto="' + esc(otherKey) + '">切过去看</button>';
+    }
+
+    bar.className = "stalebar " + fr.level;
+    bar.innerHTML = "<b>" + (fr.level === "bad" ? "数据已过期" : "数据提醒") + "</b>" +
+                    "<span>" + esc(msg) + "</span>" + btn;
+    bar.style.display = "";
+  }
+
+  /* 数据源下拉里标出各源的数据时间，避免选到空壳或过期的那份 */
+  function refreshSourceOptions(){
+    var sel = document.getElementById("source");
+    if(!sel) return;
+    for(var i = 0; i < sel.options.length; i++){
+      var o = sel.options[i], k = o.value, v = state.cache[k];
+      if(!ADAPTERS[k]) continue;
+      var tag = "";
+      if(!v) tag = "（暂无数据）";
+      else if(v.fetchedAt) tag = "（" + String(v.fetchedAt).slice(5, 16) + "）";
+      o.textContent = ADAPTERS[k].name + tag;
+    }
+  }
+
+  function applyData(key, d, announce){
+    state.cache[key] = ADAPTERS[key].build(d);
+    if(state.booting) return;      // 启动阶段先不画，等两个源都到齐再决定显示谁
+    if(key !== state.src) return;
+    paintSource();
     render();
     paintLive();
     flashStats();
-    if(announce) toast("数据已更新 · " + (d.fetchedAt || ""));
+    if(announce) toast(ADAPTERS[key].name + " 数据已更新 · " + (d.fetchedAt || ""));
+  }
+
+  /* ---------- 数据装载（本地服务 / 静态托管 / file:// 三种环境共用） ---------- */
+  function inlineSnapshot(ad){
+    return new Promise(function(resolve){
+      if(window[ad.inlineKey]){ resolve(window[ad.inlineKey]); return; }
+      var s = document.createElement("script");
+      s.src = ad.inlineFile;
+      s.onload = function(){ resolve(window[ad.inlineKey] || null); };
+      s.onerror = function(){ resolve(null); };
+      document.head.appendChild(s);
+    });
+  }
+
+  var canFetch = location.protocol === "http:" || location.protocol === "https:";
+
+  function loadSource(key, announce){
+    var ad = ADAPTERS[key];
+    var loader = canFetch
+      ? fetch(ad.file + "?_=" + Date.now(), { cache: "no-store" })
+          .then(function(r){ if(!r.ok) throw 0; return r.json(); })
+          .catch(function(){ return null; })
+      : Promise.resolve(null);
+    return loader.then(function(d){
+      return d ? d : inlineSnapshot(ad);
+    }).then(function(d){
+      if(!d){
+        state.cache[key] = null;
+        if(state.booting) return;          // 启动阶段交给 defaultSourceKey 收尾
+        if(key === state.src){ paintSource(); render(); }
+        return;
+      }
+      applyData(key, d, announce);
+    });
   }
 
   /* ---------- 实时刷新（配合 spdex_server.py） ---------- */
@@ -598,10 +990,11 @@ table.datatable{
 
     if(!live.on){                       // 没有本地服务：静态托管或 file:// 打开
       el.className = "live off";
-      var d = state.data;
-      if(d && d.fetchedAt){
-        tx.textContent = "数据更新 " + d.fetchedAt.slice(5, 16);
-        el.title = "本页数据抓取于 " + d.fetchedAt + "（静态页面，需在服务器端更新数据文件）";
+      var view = currentView();
+      var ft = view && view.fetchedAt;
+      if(ft){
+        tx.textContent = "数据更新 " + ft.slice(5, 16);
+        el.title = "本页数据抓取于 " + ft + "（静态页面，需在服务器端更新数据文件）";
       }else{
         tx.textContent = "静态数据";
         el.title = "静态页面";
@@ -609,18 +1002,21 @@ table.datatable{
       return;
     }
     var s = live.st || {};
+    var manual = !s.interval;       // 服务端关掉了自动抓取 → 不显示误导性的倒计时
     bt.disabled = !!s.running;
     if(s.running){
       el.className = "live on busy";
       tx.textContent = "正在抓取…";
-      el.title = "服务正在抓取最新数据";
+      el.title = "服务正在抓取最新数据（会弹出浏览器窗口，属正常）";
     }else if(s.error){
       el.className = "live on err";
-      tx.innerHTML = "抓取失败 · <em>" + mmss(live.left) + "</em> 后重试";
+      tx.innerHTML = manual ? "抓取失败"
+                            : "抓取失败 · <em>" + mmss(live.left) + "</em> 后重试";
       el.title = s.error;
     }else{
       el.className = "live on";
-      tx.innerHTML = "自动刷新 · 剩 <em>" + mmss(live.left) + "</em>";
+      tx.innerHTML = manual ? "手动刷新"
+                            : "自动刷新 · 剩 <em>" + mmss(live.left) + "</em>";
       el.title = "上次抓取 " + (s.lastOkAt || "-") + "　数据时间 " + (s.fetchedAt || "-");
     }
   }
@@ -633,7 +1029,7 @@ table.datatable{
       live.seq = s.seq;               // 首帧只记录版本号，避免刚打开就重复拉取
     }else if(s.seq !== live.seq){
       live.seq = s.seq;               // 服务端抓到了新数据 → 立刻重载并保留用户当前视图
-      pullData(true);
+      reloadAll(true);
     }
     paintLive();
     if(!live.tick){
@@ -644,11 +1040,10 @@ table.datatable{
     }
   }
 
-  function pullData(announce){
-    fetch("data.json?_=" + Date.now(), { cache: "no-store" })
-      .then(function(r){ if(!r.ok) throw 0; return r.json(); })
-      .then(function(d){ applyData(d, announce); })
-      .catch(function(){ /* 读取失败就保持当前画面，不打断用户 */ });
+  function reloadAll(announce){
+    SRC_KEYS.forEach(function(k){
+      loadSource(k, k === state.src && announce);
+    });
   }
 
   function openSSE(){
@@ -682,49 +1077,33 @@ table.datatable{
   }
 
   /* ---------- 启动 ---------- */
-  function boot(data){
-    applyData(data, false);
-    bind();
-  }
-
-  // 数据来源：http(s) 下 fetch data.json（本地服务 / 虚拟主机都能用）；
-  // 只有 file:// 打开、或线上拿不到 data.json 时，才退回内联快照
-  function loadInlineSnapshot(){
-    return new Promise(function(resolve){
-      if(window.__DATA__){ resolve(window.__DATA__); return; }
-      var s = document.createElement("script");
-      s.src = "data-inline.js";
-      s.onload = function(){ resolve(window.__DATA__ || null); };
-      s.onerror = function(){ resolve(null); };
-      document.head.appendChild(s);
-    });
-  }
-
   // 是否探测本地实时服务。publish.py 生成静态发布包时会把下面这行改成 false：
   // 线上没有本地服务，连探测都不必发，避免每个访客都白打一次 404
   var LIVE_PROBE = true;
 
-  var canFetch = location.protocol === "http:" || location.protocol === "https:";
+  buildSourceOptions();
+  if(SRC_KEYS.indexOf(state.src) < 0) state.src = SRC_KEYS[0] || state.src;
 
-  var loader = canFetch
-    ? fetch("data.json", { cache: "no-store" })
-        .then(function(r){ if(!r.ok) throw 0; return r.json(); })
-        .catch(function(){ return null; })
-    : Promise.resolve(null);
-
-  loader.then(function(d){
-    return d ? d : loadInlineSnapshot();
-  }).then(function(d){
-    if(!d){
-      document.getElementById("list").innerHTML =
-        '<div class="empty">未找到数据。请先运行 <b>python spdex_server.py</b> 启动本地服务，' +
-        "或运行 <b>python spdex_fetch.py</b> 生成数据文件。</div>";
-      paintLive();
-      return;
-    }
-    boot(d);
-    if(canFetch && LIVE_PROBE) startLive();
-  });
+  // 启用中的源并行取回，都到齐后再决定首屏显示谁（见 defaultSourceKey）。
+  // 不能像以前那样「先画第一个源就算完」：那个源一旦停更，页面会一直显示
+  // 几天前的数据，而另一个源的今日数据其实已经拿到了。
+  state.booting = true;
+  Promise.all(SRC_KEYS.map(function(k){ return loadSource(k, false); }))
+    .then(function(){
+      state.booting = false;
+      var best = defaultSourceKey();
+      if(best && best !== state.src){
+        switchSource(best, false);
+      }else{
+        paintSource();
+        render();
+        paintLive();
+      }
+      bind();
+      if(canFetch && LIVE_PROBE) startLive();
+      // 数据年龄会随时间增长，每分钟重算一次过期提示（只动状态条，不重画列表）
+      setInterval(paintStale, 60000);
+    });
 })();
 </script>
 </body>
