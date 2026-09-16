@@ -69,13 +69,7 @@ a:hover{color:#c60}
 }
 .sn-menu a:hover{background:rgba(255,255,255,.16);color:#fff}
 .sn-menu li.on a{background:rgba(0,0,0,.18);font-weight:700}
-.sn-menu-login{display:none}          /* 仅小屏下拉里出现 */
 .sn-right{display:flex;align-items:center;gap:8px;flex:0 0 auto;margin-left:auto}
-.sn-login{
-  display:block;padding:6px 14px;border:1px solid rgba(255,255,255,.55);
-  border-radius:4px;color:#fff;font-size:13px;white-space:nowrap;transition:.15s
-}
-.sn-login:hover{background:#fff;color:#216d01;border-color:#fff}
 .sn-burger{
   display:none;width:34px;height:30px;padding:0;cursor:pointer;
   border:1px solid rgba(255,255,255,.5);border-radius:4px;background:transparent
@@ -289,7 +283,6 @@ table.datatable{
   .sn-brand{margin-right:auto}
   .sn-brand img{height:28px}
   .sn-right{margin-left:auto;gap:0}
-  .sn-login{display:none}
   .sn-burger{display:block}
   .sn-menu{
     display:none;position:absolute;left:0;right:0;top:100%;z-index:91;
@@ -300,7 +293,6 @@ table.datatable{
   .sn-menu a{padding:12px 16px;border-radius:0;font-size:14px}
   .sn-menu a:hover{background:rgba(255,255,255,.1)}
   .sn-menu li.on a{background:rgba(0,0,0,.22)}
-  .sn-menu-login{display:block}
 }
 @media (max-width:640px){
   .nbar{flex-wrap:wrap;height:auto;padding:8px 10px;gap:8px}
@@ -338,10 +330,8 @@ table.datatable{
       <li class="on"><a href="https://90qu.com/football/">必发数据</a></li>
       <li><a href="https://90qu.com/archives/category/%e6%95%99%e7%a8%8b">数据教程</a></li>
       <li><a href="https://90qu.com/archives/category/ziyuan">资源下载</a></li>
-      <li class="sn-menu-login"><a href="https://90qu.com/user-sign">登录 / 注册</a></li>
     </ul>
     <div class="sn-right">
-      <a class="sn-login" href="https://90qu.com/user-sign">登录 / 注册</a>
       <button class="sn-burger" id="snBurger" type="button" aria-label="展开菜单" aria-expanded="false">
         <span></span><span></span><span></span>
       </button>
