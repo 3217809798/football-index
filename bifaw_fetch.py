@@ -153,6 +153,46 @@ class Bifaw:
         except Exception:
             return ""
 
+    # ---------------- 导航 ----------------
+    def goto_safe(self, url, expect="", tries=4, note=""):
+        """打开页面，带重试与「已在目标页」判定。
+
+        ⚠️ **CI 上必踩的坑**：登录成功后站点会自行跳转（页面上写着
+        「成功登录,正在跳转页面 如果你的浏览器没反应，请点击这里」）。此时立刻
+        再调用 goto，浏览器会中断这次导航并抛
+        `Page.goto: net::ERR_ABORTED`——脚本随即崩掉，一轮数据都拿不到。
+        本地之所以复现不了：本地有持久登录态，`已有有效登录态，跳过登录`，
+        压根不走「登录 → 立刻重新打开主页」这条路径。
+
+        对策：失败后先等页面把自己的跳转走完再重试；若此时的 URL 已经是
+        目标页，直接视为成功，不再重复导航。
+        """
+        last = ""
+        for i in range(1, tries + 1):
+            try:
+                self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                return True
+            except Exception as exc:
+                last = str(exc).strip().splitlines()[0][:160]
+                log("%s导航失败（第%d/%d 次）：%s" % (note, i, tries, last))
+                if i >= tries:
+                    break
+                # 给页面自身那次跳转留出时间
+                try:
+                    self.page.wait_for_timeout(2500)
+                    self.page.wait_for_load_state("domcontentloaded", timeout=20000)
+                except Exception:
+                    pass
+                try:
+                    cur = self.page.url or ""
+                except Exception:
+                    cur = ""
+                if expect and expect in cur:
+                    log("  页面已在目标页（%s），跳过重复导航" % cur)
+                    return True
+        log("%s仍无法打开 %s（最后一次：%s）" % (note, url, last))
+        return False
+
     # ---------------- 登录 ----------------
     def is_logged_in(self):
         """打开竞彩必发页，看是否被挡在登录墙外。
@@ -160,7 +200,7 @@ class Bifaw:
         页面脚本在登录态时会把 #ErrMsgWin 填成「你还没有登陆，请点击此处登陆!」，
         这一句出现得很快（数据本身才需要等），所以用它判断最省时间。
         """
-        self.page.goto(HOME, wait_until="domcontentloaded")
+        self.goto_safe(HOME, expect="sporttery", note="打开竞彩必发页时")
         for _ in range(8):
             self.page.wait_for_timeout(1000)
             try:
@@ -186,7 +226,7 @@ class Bifaw:
     def login(self, max_round=8):
         log("登录态失效，开始登录（验证码 OCR）…")
         for n in range(1, max_round + 1):
-            self.page.goto(LOGIN, wait_until="domcontentloaded")
+            self.goto_safe(LOGIN, expect="login", note="打开登录页时")
             self.page.wait_for_timeout(1200)
             el = self.page.query_selector("#vdimgck")
             if not el:
@@ -234,6 +274,14 @@ class Bifaw:
                 return False
             log("  第%d轮：登录通过（%s）" % (n, flat[:120]))
             self.shot("_bifaw_afterlogin")
+            # 站点这时正在自行跳转（页面上是「成功登录,正在跳转页面」）。
+            # 必须等它跳完，否则紧接着的 goto 会被中断 —— CI 上第一轮就是这么挂的，
+            # 详见 goto_safe 的说明。
+            try:
+                self.page.wait_for_load_state("domcontentloaded", timeout=20000)
+            except Exception:
+                pass
+            self.page.wait_for_timeout(1500)
             return True
         log("登录失败：重试 %d 轮仍未通过" % max_round)
         return False
@@ -310,7 +358,8 @@ class Bifaw:
     """
 
     def fetch(self):
-        self.page.goto(HOME, wait_until="domcontentloaded")
+        if not self.goto_safe(HOME, expect="sporttery", note="打开数据页时"):
+            log("警告：没能正常打开数据页，继续尝试解析当前页面")
         try:
             self.page.wait_for_selector("#abf_match .match, #abf_match table, #abf_match tr",
                                         timeout=45000)
