@@ -279,15 +279,19 @@ def check_bifaw(path):
 
 
 def fetch_bifaw():
-    """抓竞彩必发数据。**失败不影响 spdex 上线** —— 保留上一份 bifaw.json 继续发布。
+    """抓竞彩必发数据。失败时**保留上一份 bifaw.json 继续发布**，但必须把失败
+    往外传（调用方据此报 WARN）—— 否则抓取明明挂了、日志却一路 OK，
+    页面悄悄停在旧数据上，正是「数据几天没更新却没人发现」的成因。
 
     该站要登录 + 过验证码，且必须在有界面浏览器里跑（纯 headless 会被识别，
     页面直接报「undefined，请点击此处重新获取!」），所以 CI 里需要 xvfb。
+
+    返回 (ok, why)：ok=False 表示本轮没拿到新数据（数据已回滚为上一份）。
     """
     path = os.path.join(ROOT, "bifaw.json")
     script = os.path.join(ROOT, "bifaw_fetch.py")
     if not os.path.exists(script):
-        return
+        return False, "缺少 bifaw_fetch.py"
     import subprocess
     backup = path + ".bak"
     had = os.path.exists(path)
@@ -315,6 +319,7 @@ def fetch_bifaw():
         log("竞彩必发数据正常：%s" % why)
     if os.path.exists(backup):
         os.remove(backup)
+    return ok, why
 
 
 def sync_inline(use_spdex=True):
@@ -680,9 +685,11 @@ def run(args):
             if os.path.exists(p):
                 os.remove(p)
 
-    # ---------- 1b. 抓取第二个数据源：竞彩必发（失败不影响 spdex 上线） ----------
+    # ---------- 1b. 抓取竞彩必发（失败则沿用上一份，但必须报 WARN） ----------
+    bifaw_ok, bifaw_why = True, "未抓取"
     if not args.no_fetch and not args.skip_bifaw:
-        fetch_bifaw()
+        bifaw_ok, bifaw_why = fetch_bifaw()
+    bifaw_stale = not bifaw_ok
 
     # ---------- 2. 校验「当前启用的源」+ 生成发布包 ----------
     if use_spdex:
@@ -703,9 +710,14 @@ def run(args):
 
     if not args.upload:
         log("未加 --upload：发布包已生成，可手动上传 dist/")
-        log("RESULT: %s" % ("WARN - package built (spdex data stale)"
-                            if stale else "OK - package built (no --upload flag)"))
-        return 2 if stale else 0
+        if bifaw_stale:
+            log("RESULT: WARN - package built; bifaw fetch failed (%s)" % bifaw_why)
+            return 2
+        if stale:
+            log("RESULT: WARN - package built (spdex data stale)")
+            return 2
+        log("RESULT: OK - package built (no --upload flag)")
+        return 0
 
     conf = load_conf()
     if not conf:
@@ -717,6 +729,9 @@ def run(args):
     fp = fingerprint(*data_files)
     if args.only_data and not args.force and fp and fp == read_fp():
         log("数据与上次上传一致，跳过上传（要强制上传加 --force）")
+        if bifaw_stale:
+            log("RESULT: WARN - data unchanged; bifaw fetch failed (%s)" % bifaw_why)
+            return 2
         log("RESULT: OK - data unchanged, nothing uploaded")
         return 0
 
@@ -741,6 +756,10 @@ def run(args):
     if ok:
         write_fp(fp)                       # 只有上传成功才记指纹
         log("上传完成 ✓  共 %d 个文件" % len(files))
+        if bifaw_stale:
+            log("RESULT: WARN - uploaded %d file(s); bifaw fetch failed (%s), kept previous data"
+                % (len(files), bifaw_why))
+            return 2                        # 2 = 数据不完整但不算故障（CI 出黄灯不出红灯）
         if stale:
             log("RESULT: WARN - uploaded %d file(s); spdex fetch unusable, kept previous data"
                 % len(files))
