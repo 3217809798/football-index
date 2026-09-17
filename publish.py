@@ -4,7 +4,7 @@ publish.py —— 把竞彩指数页面发布到静态虚拟主机（如 90qu.co
 
 虚拟主机上跑不了常驻的 Python 服务，所以换成「本地抓取 → 上传静态文件」的模式：
     1. 抓最新数据（竞彩必发走 bifaw_fetch.py；超级指数已下线，见下面的开关）
-    2. 生成发布包 dist/（index.html + bifaw.json + .htaccess + 内联快照）
+    2. 生成发布包 dist/（index.html + bf.json + .htaccess + 内联快照）
     3. 通过 FTP/FTPS/SFTP 把文件传到站点子目录
 
 用法：
@@ -208,9 +208,9 @@ def active_data_files(use_spdex=True):
     """当前启用中的源对应的数据文件（绝对路径），顺序即加载顺序。
 
     发布时间/指纹/校验/上传都从这里取，避免代码各处再写死一次
-    「data.json + bifaw.json」而漏掉开关。
+    「data.json + bf.json」而漏掉开关。
     """
-    names = ["bifaw.json"]
+    names = ["bf.json"]
     if use_spdex:
         names.insert(0, "data.json")
     return [os.path.join(ROOT, n) for n in names]
@@ -260,7 +260,7 @@ def write_fp(fp):
 def check_bifaw(path):
     """竞彩必发数据的可上线校验（与 check_data 同思路，但字段是 rows）"""
     if not os.path.exists(path):
-        return False, "没有 bifaw.json"
+        return False, "没有 bf.json"
     try:
         with open(path, encoding="utf-8") as f:
             d = json.load(f)
@@ -288,7 +288,7 @@ def fetch_bifaw():
 
     返回 (ok, why)：ok=False 表示本轮没拿到新数据（数据已回滚为上一份）。
     """
-    path = os.path.join(ROOT, "bifaw.json")
+    path = os.path.join(ROOT, "bf.json")
     script = os.path.join(ROOT, "bifaw_fetch.py")
     if not os.path.exists(script):
         return False, "缺少 bifaw_fetch.py"
@@ -312,7 +312,7 @@ def fetch_bifaw():
 
     ok, why = check_bifaw(path) if rc == 0 else (False, "抓取退出码 %s" % rc)
     if not ok:
-        log("竞彩必发数据不可用（%s）→ 保留上一份 bifaw.json" % why)
+        log("竞彩必发数据不可用（%s）→ 保留上一份 bf.json" % why)
         if had and os.path.exists(backup):
             shutil.copy2(backup, path)
     else:
@@ -322,6 +322,29 @@ def fetch_bifaw():
     return ok, why
 
 
+# ---------------------------------------------------------------- 发布前净化
+# 数据 JSON 与内联快照都会原样发布到公网，任何"从哪儿抓的"痕迹都不能带出去。
+# 页面本身不读这些字段，它们纯粹是发布物上的指纹，所以在打包这一步直接摘掉。
+_PRIVATE_KEYS = ("source", "sourceName", "sourceUrl", "url", "referer", "referrer")
+
+
+def sanitize(d):
+    """摘掉顶层的源站标识字段（只动顶层，不动 matches 里的业务字段）"""
+    if isinstance(d, dict):
+        for k in _PRIVATE_KEYS:
+            d.pop(k, None)
+    return d
+
+
+def write_clean_json(src, dst, indent=2):
+    """读 src → 净化 → 写 dst（不直接 copy，避免把指纹一起发布出去）"""
+    with open(src, encoding="utf-8") as f:
+        d = sanitize(json.load(f))
+    with open(dst, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(d, f, ensure_ascii=False, indent=indent)
+    return d
+
+
 def sync_inline(use_spdex=True):
     """由各源的 json 重新生成内联快照（bifaw-inline.js / data-inline.js）。
 
@@ -329,7 +352,7 @@ def sync_inline(use_spdex=True):
     就不会出现「json 已经还原成旧的好数据、快照却还是刚写坏的 0 场空壳」这种半截状态
     —— 只还原 json 不还原快照，会把一份空壳打进发布包（踩过）。
     """
-    pairs = [("bifaw.json", "bifaw-inline.js", "__BIFAW__", "供 file:// 打开时使用")]
+    pairs = [("bf.json", "bf-inline.js", "__BF__", "供 file:// 打开时使用")]
     if use_spdex:
         pairs.insert(0, ("data.json", "data-inline.js", "__DATA__",
                          "供 file:// 直接打开时使用"))
@@ -339,9 +362,9 @@ def sync_inline(use_spdex=True):
             continue
         try:
             with open(src, encoding="utf-8") as f:
-                d = json.load(f)
+                d = sanitize(json.load(f))
             with open(os.path.join(ROOT, out), "w", encoding="utf-8") as f:
-                f.write("/* 自动生成：由 %s 导出，%s */\n" % (js, note))
+                f.write("/* 自动生成：数据快照，%s */\n" % note)
                 f.write("window.%s = %s;\n"
                         % (key, json.dumps(d, ensure_ascii=False, separators=(",", ":"))))
         except Exception as exc:
@@ -377,15 +400,23 @@ def build_dist(use_spdex=True):
         f.write(page)
 
     for p in data_files:
-        shutil.copy2(p, os.path.join(DIST, os.path.basename(p)))
+        # 不直接 copy：先把源站标识摘掉再落进发布包（见 sanitize）
+        write_clean_json(p, os.path.join(DIST, os.path.basename(p)))
 
     # 内联快照（file:// 兜底）。下线源的不再带
-    for name in ("data-inline.js", "bifaw-inline.js"):
+    for name in ("data-inline.js", "bf-inline.js"):
         if name == "data-inline.js" and not use_spdex:
             continue
         src = os.path.join(ROOT, name)
         if os.path.exists(src):
             shutil.copy2(src, os.path.join(DIST, name))
+
+    # 清掉 dist/ 里的历史文件名 —— dist/ 是跨轮累积的，改过名的旧文件不清掉
+    # 会一直躺在里面（线上的那份还得另外删一次）
+    for legacy in ("bifaw.json", "bifaw-inline.js"):
+        p = os.path.join(DIST, legacy)
+        if os.path.exists(p):
+            os.remove(p)
 
     # 清掉 dist/ 里已下线源的残留 —— dist/ 是跨轮累积的，
     # 不清理的话线上会一直留着一份几天前（甚至更早）的 data.json
@@ -492,7 +523,7 @@ def check_ftp(cfg):
     try:
         names = ftp.nlst()
         log("该目录现有文件：%s" % (", ".join(names[:20]) if names else "（空）"))
-        missing = [n for n in ("index.html", "bifaw.json") if n not in names]
+        missing = [n for n in ("index.html", "bf.json") if n not in names]
         if missing:
             log("    注意：缺少 %s —— 如果这是第一次部署，先做一次全量上传（去掉 --only-data）"
                 % "、".join(missing))
@@ -698,10 +729,10 @@ def run(args):
             log("data.json 不可用（%s），中止" % why)
             log("RESULT: FAIL - local data.json unusable")
             return 2
-    ok, why = check_bifaw(os.path.join(ROOT, "bifaw.json"))
+    ok, why = check_bifaw(os.path.join(ROOT, "bf.json"))
     if not ok:
-        log("bifaw.json 不可用（%s），中止" % why)
-        log("RESULT: FAIL - local bifaw.json unusable")
+        log("bf.json 不可用（%s），中止" % why)
+        log("RESULT: FAIL - local bf.json unusable")
         return 2
 
     if not build_dist(use_spdex):
@@ -739,7 +770,7 @@ def run(args):
     if not args.only_data:
         files.append((os.path.join(DIST, "index.html"), "index.html"))
         files.append((os.path.join(DIST, ".htaccess"), ".htaccess"))
-        snaps = ["bifaw-inline.js"] + (["data-inline.js"] if use_spdex else [])
+        snaps = ["bf-inline.js"] + (["data-inline.js"] if use_spdex else [])
         for snap in snaps:
             p = os.path.join(DIST, snap)
             if os.path.exists(p):

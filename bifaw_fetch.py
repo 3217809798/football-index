@@ -14,7 +14,7 @@ https://bifaw.com/bifaw/sporttery.php
 失效时才重新登录（最多重试 N 次，验证码由 ddddocr 识别）。
 
 用法:
-    python bifaw_fetch.py                 # 抓取并写 bifaw.json
+    python bifaw_fetch.py                 # 抓取并写 bf.json
     python bifaw_fetch.py --capture       # 额外把原始 HTML/截图存到 logs/（调试用）
     python bifaw_fetch.py --out x.json
     python bifaw_fetch.py --login-only    # 只做登录，验证凭据
@@ -465,9 +465,8 @@ class Bifaw:
                 "ou": ou,
             })
         data = {
-            "source": "bifaw",
-            "sourceName": "竞彩必发（必发指数网）",
-            "url": HOME,
+            # ⚠️ 不要把源站标识写进数据：这份 JSON 会原样发布到公网，
+            #    早先带过 source / sourceName / url，等于把"数据从哪抓的"摆在明面上。
             "fetchedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
             "columns": self.COLUMNS,
             "matches": matches,
@@ -523,11 +522,11 @@ def fetch_once(out, capture=False, headless=False, user="", pwd="", login_only=F
             json.dump(data, f, ensure_ascii=False, indent=2)
         log("已写入 %s（%.1f KB）" % (out, os.path.getsize(out) / 1024.0))
 
-        # 内联快照：file:// 直接打开 index.html 时可用（与 spdex 的 data-inline.js 同款）
-        inline = os.path.join(os.path.dirname(os.path.abspath(out)), "bifaw-inline.js")
+        # 内联快照：file:// 直接打开 index.html 时可用
+        inline = os.path.join(os.path.dirname(os.path.abspath(out)), "bf-inline.js")
         with open(inline, "w", encoding="utf-8") as f:
-            f.write("/* 自动生成：bifaw 抓取快照，供 file:// 打开时使用 */\n")
-            f.write("window.__BIFAW__ = %s;\n"
+            f.write("/* 自动生成：数据快照，供 file:// 直接打开时使用 */\n")
+            f.write("window.__BF__ = %s;\n"
                     % json.dumps(data, ensure_ascii=False, separators=(",", ":")))
         log("内联快照 -> %s" % os.path.basename(inline))
         return 0, why
@@ -537,7 +536,7 @@ def fetch_once(out, capture=False, headless=False, user="", pwd="", login_only=F
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=os.path.join(ROOT, "bifaw.json"))
+    ap.add_argument("--out", default=os.path.join(ROOT, "bf.json"))
     ap.add_argument("--capture", action="store_true", help="保存原始 HTML / 截图便于调试")
     ap.add_argument("--login-only", action="store_true")
     ap.add_argument("--headless", action="store_true",

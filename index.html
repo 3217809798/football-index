@@ -3,18 +3,18 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>足球指数中心 · 超级指数与竞彩必发</title>
-<meta name="description" content="竞彩足球指数数据页面：超级指数（c.spdex.com）与竞彩必发（bifaw.com）两个数据源，展示每场比赛的指数、交易量、比例、赔付、价位、挂牌指数、欧洲平均、凯利方差等数据。" />
+<title>足球指数中心 · 竞彩必发指数数据</title>
+<meta name="description" content="竞彩足球必发指数数据页面：逐场展示每场比赛的交易量、比例、赔付、价位、挂牌指数、欧洲平均、凯利方差与大小球指数等数据。" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%BD%3C/text%3E%3C/svg%3E" />
 <meta property="og:type" content="website" />
-<meta property="og:title" content="足球指数中心 · 竞彩交易量与超级指数" />
+<meta property="og:title" content="足球指数中心 · 竞彩必发指数数据" />
 <meta property="og:description" content="竞彩足球交易量、比例、赔付、价位、挂牌指数、欧洲平均、凯利方差与大小球指数。" />
 <style>
 /* ============ 基础 ============ */
 *,*::before,*::after{box-sizing:border-box}
 :root{
   --navh:64px;              /* 站点导航条高度；小屏改为 0（导航条不再吸顶） */
-  /* 原站 c.spdex.com/spdexlehejc 的橙色系 */
+  /* 主色调：橙色系 */
   --brand:#ff9900;          /* 主橙：场次标题条 / 分页当前页 */
   --brand-d:#e88a00;        /* 深橙：hover */
   --head:#ffe6c0;           /* 表头底色 */
@@ -171,7 +171,7 @@ a:hover{color:#c60}
 .viewer>div{overflow:hidden}
 .match.collapsed .viewer{grid-template-rows:0fr}
 
-/* ============ 数据表（原站：米色表头 + 灰底数据格 + 米黄队名列）============ */
+/* ============ 数据表（米色表头 + 灰底数据格 + 米黄队名列）============ */
 .tablescroll{overflow-x:auto;background:#fff}
 table.datatable{
   width:100%;min-width:700px;border-collapse:separate;border-spacing:0;
@@ -301,7 +301,7 @@ table.datatable{
   .live{margin-left:auto}
 }
 
-/* ============ 竞彩必发（bifaw）专用 ============ */
+/* ============ 竞彩必发数据专用 ============ */
 .datatable th.itemcol{width:52px}
 .datatable td.itemcell{
   width:52px;text-align:center;font-weight:700;color:var(--ink)
@@ -343,10 +343,6 @@ table.datatable{
 
   <!-- 顶栏 -->
   <div class="nbar">
-    <div class="door" id="jcwrap">
-      <label for="dropJc">竞彩期号：</label>
-      <select id="dropJc"></select>
-    </div>
     <div class="door">
       <label for="source">数据来源：</label>
       <select id="source"></select>
@@ -388,20 +384,18 @@ table.datatable{
 
 <div class="toast" id="toast"></div>
 
-<!-- 内联快照 data-inline.js 改为按需动态加载：线上跑 http 时只拉 data.json，
-     省掉一半流量；用 file:// 双击打开时才会加载它 -->
+<!-- 数据快照按需动态加载：线上跑 http 时只拉数据文件，省掉一半流量；
+     用 file:// 双击打开时才会加载内联快照 -->
 <script>
 (function(){
   "use strict";
 
   var PER_PAGE = 8;
 
-  /* 数据源：spdex（超级指数）/ bifaw（竞彩必发）。
-     两者表结构与字段语义完全不同，所以走「适配器」：每个源把原始 JSON
-     翻译成外壳认识的统一形态，搜索 / 排序 / 折叠 / 分页 / 状态条 / 播报
-     全部共用，不必为第二个源再写一套交互。 */
+  /* 数据走「适配器」：适配器把原始 JSON 翻译成外壳认识的统一形态，
+     搜索 / 排序 / 折叠 / 分页 / 状态条 / 播报全部共用，将来加源不必重写交互。 */
   var state = {
-    src:"spdex", cache:{}, page:1, q:"", sort:"no",
+    src:"bf", cache:{}, page:1, q:"", sort:"no",
     allCollapsed:false, collapsed:{}, booting:false
   };
 
@@ -513,98 +507,15 @@ table.datatable{
   /* ================= 适配器 ================= */
   var ADAPTERS = {
 
-    /* ---------------- 超级指数（c.spdex.com/spdexlehejc） ---------------- */
-    spdex: {
-      name: "超级指数",
-      enabled: false,      // ⛔ 源站已改成会员登录站（2026-09-16 下线），见 SRC_KEYS 注释
-      file: "data.json",
-      inlineKey: "__DATA__",
-      inlineFile: "data-inline.js",
-      volLabel: "总成交",
-      emptyTip: '没有 spdex 数据。请先运行 <b>python spdex_fetch.py</b> 生成 data.json。',
-
-      build: function(d){
-        var cols = (d.columns || []).map(function(c){
-          var cls = c === "球队队名" ? "teamname" : (/交易量/.test(c) ? "long" : "");
-          return "<th" + (cls ? ' class="' + cls + '"' : "") + ">" + esc(c) + "</th>";
-        }).join("");
-
-        function rowHtml(r){
-          var nameCell = r.name
-            ? '<td class="teamname">' + esc(r.name) + "</td>"
-            : '<td class="teamname"><span class="draw-tag">平局</span></td>';
-          return "<tr>" + nameCell +
-            "<td>" + esc(r.idx) + "</td>" +
-            '<td class="long">' + esc(r.vol) + "</td>" +
-            pctCell(r.pct, false) +
-            '<td class="' + signCls(r.pay) + '">' + esc(r.pay) + "</td>" +
-            "<td>" + esc(r.price) + "</td>" +
-            '<td class="' + signCls(r.listed) + '">' + esc(r.listed) + "</td>" +
-            "<td>" + esc(r.euro) + "</td>" +
-            "<td>" + esc(r.kelly) + "</td>" +
-            '<td class="long">' + esc(r.ouVol) + "</td>" +
-            (r.ouPct ? pctCell(r.ouPct, true) : "<td></td>") +
-            "<td>" + esc(r.ouPrice) + "</td>" +
-            "<td>" + esc(r.ouIdx) + "</td>" +
-          "</tr>";
-        }
-
-        var items = (d.matches || []).map(function(m){
-          return {
-            id: m.id,
-            title: m.title,
-            home: m.home, away: m.away, kickoff: m.kickoff,
-            total: m.total, updateTime: m.updateTime,
-            volNum: num(m.total),
-            hpctNum: num(m.rows && m.rows[0] && m.rows[0].pct),
-            tableHtml: '<table class="datatable">' +
-              "<thead><tr>" + cols + "</tr></thead>" +
-              "<tbody>" + (m.rows || []).map(rowHtml).join("") + "</tbody>" +
-            "</table>"
-          };
-        });
-
-        // 播报：全部场次按单项交易量取 Top6
-        var tops = [];
-        (d.matches || []).forEach(function(m){
-          (m.rows || []).forEach(function(r, i){
-            if(!r.vol) return;
-            tops.push({
-              match: m.home + " VS " + m.away,
-              side: i === 0 ? "主胜" : (i === 2 ? "客胜" : "平局"),
-              vol: r.vol, price: r.price, time: m.updateTime
-            });
-          });
-        });
-        var bits = topN(tops, 6, "vol").map(function(t){
-          return "<b>比赛</b>:" + esc(t.match) + " 市场:标准盘 " + esc(t.side) +
-                 ":<u>" + esc(t.vol) + "</u> 价位:" + esc(t.price) + " 时间:" + esc(t.time);
-        });
-
-        var totalVol = (d.matches || []).reduce(function(s,m){ return s + num(m.total); }, 0);
-        return {
-          label: d.date + " 期",
-          docTitle: d.date + " 期 · 足球指数中心",
-          dataDate: d.date,
-          items: items,
-          tickerPrefix: "必发交易所交易量 Top6",
-          tickerBits: bits,
-          fetchedAt: d.fetchedAt || "",
-          statsHtml: "共 <em>" + items.length + "</em> 场 · 总成交 <em>" +
-                     fmt(totalVol) + "</em> · 数据更新 " + esc(d.fetchedAt || "-")
-        };
-      }
-    },
-
-    /* ---------------- 竞彩必发（bifaw.com/bifaw/sporttery.php） ---------------- */
-    bifaw: {
+    /* ---------------- 竞彩必发数据 ---------------- */
+    bf: {
       name: "竞彩必发",
       enabled: true,
-      file: "bifaw.json",
-      inlineKey: "__BIFAW__",
-      inlineFile: "bifaw-inline.js",
+      file: "bf.json",
+      inlineKey: "__BF__",
+      inlineFile: "bf-inline.js",
       volLabel: "总成交量",
-      emptyTip: '没有竞彩必发数据。请先运行 <b>python bifaw_fetch.py</b> 生成 bifaw.json。',
+      emptyTip: '暂无数据，请稍后再试。',
 
       build: function(d){
         var cols = '<th class="itemcol">项</th>' + (d.columns || []).map(function(c){
@@ -687,11 +598,8 @@ table.datatable{
   };
 
   /* ---------- 启用中的数据源 ----------
-     ⛔ 超级指数（c.spdex.com）已于 2026-09-16 下线：源站整体改成会员登录站，
-        老页面没了，抓取每轮「一场都没抓到」。适配器代码保留着（enabled:false），
-        以后拿到账号要恢复，把它的 enabled 改成 true 即可，别的都不用动。
      下拉选项、启动加载、默认源选择、过期提示的「另一源」比较，全部由这份清单驱动，
-     所以下线/恢复一个源只需要改这一个地方。 */
+     所以启用/停用一个源只需要改这一个地方（enabled 置 false 即停用）。 */
   var SRC_KEYS = Object.keys(ADAPTERS).filter(function(k){
     return ADAPTERS[k].enabled !== false;
   });
@@ -896,7 +804,7 @@ table.datatable{
   }
 
   /* ---------- 切换数据源 ---------- */
-  var LS_SRC = "spdex_src_pref";       // 记住用户手动选的源
+  var LS_SRC = "fc_src_pref";          // 记住用户手动选的源
 
   function switchSource(key, announce){
     if(!ADAPTERS[key]) return;
@@ -940,13 +848,8 @@ table.datatable{
 
   function paintSource(){
     var view = state.cache[state.src];
-    // 竞彩必发没有「期号」概念，切开时隐藏期号下拉
-    var wrap = document.getElementById("jcwrap");
-    if(wrap) wrap.style.display = state.src === "spdex" ? "" : "none";
     if(view){
       document.title = view.docTitle;
-      document.getElementById("dropJc").innerHTML =
-        '<option value="1">' + esc(view.label) + "</option>";
       renderTicker(view);
     }
     paintStale();
@@ -978,7 +881,7 @@ table.datatable{
 
     var msg = ADAPTERS[state.src].name + " 的数据抓取于 " +
               ((view && view.fetchedAt) || "未知时间") + "（" + fr.text + "）";
-    if(view && view.dataDate) msg += "，期号 " + view.dataDate;
+    if(view && view.dataDate) msg += "，数据日期 " + view.dataDate;
     msg += "，可能已经过期。";
 
     var btn = "";
@@ -1053,7 +956,7 @@ table.datatable{
     });
   }
 
-  /* ---------- 实时刷新（配合 spdex_server.py） ---------- */
+  /* ---------- 实时刷新（配合本地预览服务） ---------- */
   var live = { on:false, started:false, seq:-1, es:null, st:null, left:0, tick:null, polling:false };
 
   function mmss(sec){

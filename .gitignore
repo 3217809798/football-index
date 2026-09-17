@@ -3,6 +3,8 @@
 publish.json
 # bifaw_conf.json 里含必发指数网账号密码；CI 里用 Secrets 注入环境变量
 bifaw_conf.json
+# _gh_token.txt 是 GitHub 的 Personal Access Token（用 _gh_push.py 推文件时用）
+_gh_token.txt
 
 # ---- 浏览器会话（含 cookie，体积大）----
 bifaw_profile/
@@ -25,8 +27,8 @@ ref/
 
 # ---- 要提交的文件（备忘，无需取消注释）----
 # index.html         页面本体，build_dist 需要它存在
-# bifaw.json         竞彩必发数据快照（当前唯一数据源）
-# bifaw-inline.js    file:// 打开时的内联兜底
+# bf.json         竞彩必发数据快照（当前唯一数据源）
+# bf-inline.js    file:// 打开时的内联兜底
 # bifaw_fetch.py     抓竞彩必发（登录 + 验证码 OCR）
 # publish.py         抓取+生成+上传
 # build_publish_conf.py   CI 里由 Secrets 生成 publish.json
