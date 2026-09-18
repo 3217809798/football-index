@@ -35,6 +35,9 @@ publish.py —— 把竞彩指数页面发布到静态虚拟主机（如 90qu.co
     · 加锁 —— 上一次没跑完就跳过本轮（电脑睡醒后任务计划可能补跑重叠）
     · 服务时段 —— 只在北京时间 9:00-16:00 干活，其余时间什么都不动（见 SERVICE_OPEN）
     · 不传半成品 —— 本轮没抓到数据就只传页面文件，绝不拿磁盘上的旧快照去覆盖线上
+    · 回写仓库 —— 抓到新数据时写 .publish-state（data_ok=1），CI 据此把 bf.json /
+      bf-inline.js 提交回仓库。这样「上一份」永远只是上一轮（约 20 分钟前），
+      而不是几天前 —— 万一哪轮失败仍误传了数据，线上最多倒退一轮。
     · 数据校验 —— 0 场或全部场次没解析出表格时，保留上一份数据不上传，
       避免一次抓取失败就把线上页面清空。
       校验以「当前启用的源」为准：竞彩必发失败就只保留它自己的上一份。
@@ -92,6 +95,9 @@ if ROOT not in sys.path:
 
 DIST = os.path.join(ROOT, "dist")
 CONF = os.path.join(ROOT, "publish.json")
+# CI 用的机器可读状态：本轮是否抓到了「可上线的新数据」。
+# 供 workflow 的后续步骤判断要不要把数据快照回写仓库（见下面 write_state()）。
+STATE = os.path.join(ROOT, ".publish-state")
 
 CONF_TEMPLATE = {
     "_说明": "填好 host/user/password/remote_dir 后用 python publish.py --upload 上传",
@@ -221,6 +227,26 @@ def service_state(now=None):
     if hm >= SERVICE_CLOSE[0] * 60 + SERVICE_CLOSE[1]:
         return "closed"
     return "open"
+
+
+def write_state(data_ok, why=""):
+    """把「本轮是否抓到可上线的新数据」写成 .publish-state（写不进去也无所谓）。
+
+    CI 里「把数据快照回写仓库」那一步只认这个文件里的 `data_ok=1`：
+    只有真抓到新数据才允许把 bf.json / bf-inline.js 提交回仓库 ——
+    否则会把「保留的上一份」（= 仓库里的旧快照）当成新数据又提交一遍。
+
+    背景：CI 每次都是全新 checkout，仓库里那份数据快照就是「上一份」。
+    它是几天前的，抓取失败时一旦被传上去，线上数据就被倒退（2026-09-18 踩过）。
+    回写之后仓库快照最多只落后一轮（约 20 分钟）。
+    """
+    try:
+        with open(STATE, "w", encoding="utf-8") as f:
+            f.write("data_ok=%d\n" % (1 if data_ok else 0))
+            f.write("why=%s\n" % (why or ""))
+            f.write("at=%s\n" % now_bj().strftime("%Y-%m-%d %H:%M:%S"))
+    except Exception:
+        pass
 
 
 def check_data(path):
@@ -882,6 +908,9 @@ def run(args):
     data_files = active_data_files(use_spdex)
     data_ok = bifaw_ok and not stale
     fp = fingerprint(*data_files)
+    # 记下「本轮有没有抓到可上线的新数据」，供 CI 决定要不要回写仓库快照。
+    # --no-fetch 时磁盘上的数据不是本轮抓的，不算新数据（否则会把旧快照又提交一遍）。
+    write_state(data_ok and not args.no_fetch, bifaw_why)
 
     if data_ok and args.only_data and not args.force and fp and fp == read_fp():
         log("数据与上次上传一致，跳过上传（要强制上传加 --force）")
@@ -964,6 +993,9 @@ def main():
         log("RESULT: OK - ftp config verified" if ok else "RESULT: FAIL - ftp config problem")
         return 0 if ok else 1
 
+    # 先落一个「没抓到」的默认状态：run() 中途 return（例如服务时段 SKIP）
+    # 时，CI 的回写步骤看到 data_ok=0 就会跳过提交。
+    write_state(False, "未进入抓取流程")
     if not acquire_lock():
         log("上一次发布还没结束，本轮跳过")
         log("RESULT: SKIP - another run still in progress")
