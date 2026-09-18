@@ -462,7 +462,7 @@ table.datatable{
   var PER_PAGE = 8;
 
   /* 数据走「适配器」：适配器把原始 JSON 翻译成外壳认识的统一形态，
-     搜索 / 排序 / 折叠 / 分页 / 状态条 / 播报全部共用，将来加源不必重写交互。 */
+     搜索 / 排序 / 折叠 / 分页 / 状态条全部共用，将来加源不必重写交互。 */
   var state = {
     src:"bf", cache:{}, page:1, q:"", sort:"no",
     allCollapsed:false, collapsed:{}, booting:false
