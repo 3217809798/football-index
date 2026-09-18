@@ -10,8 +10,13 @@
 做法：
   1) 物理 robots.txt = WP 原版内容（Disallow /wp-admin/ + Allow admin-ajax）
      ＋ 追加一行 Sitemap: sitemap-data.xml
-  2) sitemap-data.xml = 只含数据页（/football/、/jc/），lastmod 取北京时间当天。
-     以后加「按天归档页」时，往 PAGES() 里追加即可。
+  2) sitemap-data.xml = 主页 + /jc/ + /football/archive/ + **每一天的归档页**
+     （/football/<日期>/）。清单统一来自 archive.py 的 sitemap_entries()，
+     所以归档页一生成就会进 sitemap，不需要到这里改代码。
+
+    ⚠️ 日常不用手动跑这个脚本：`publish.py` 每轮真抓到数据后会**顺手刷新并上传**
+       sitemap-data.xml（归档日一变 sitemap 就得跟着变，否则百度发现不了新归档页）。
+       这里主要留作首次部署、以及 `--check` 体检。
 
 用法：
   python build_seo_files.py             # 只生成到 seo/
@@ -35,6 +40,8 @@ import ftplib
 import urllib.request
 import urllib.error
 
+import archive          # sitemap 的 URL 清单（含按天归档页）唯一来源
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(ROOT, "seo")
 CONF = os.path.join(ROOT, "publish.json")
@@ -52,11 +59,14 @@ def bj_day():
 
 
 def pages():
-    """要进 sitemap 的 URL。第三档的按天归档页将来追加在这里。"""
-    return [
-        ("%s/football/" % SITE, 0.9, "today 竞彩足球指数数据"),
-        ("%s/jc/" % SITE, 0.9, "今日竞足赛事数据分析"),
-    ]
+    """要进 sitemap 的 URL 清单 -> [(url, priority, changefreq, lastmod)]。
+
+    ⚠️ 2026-09-19 起统一从 archive.sitemap_entries() 取 —— 主页、/jc/、
+       /football/archive/ 索引页，以及**每一天的归档页**（/football/<日期>/）
+       都在那一处维护。这样 sitemap 与实际存在的归档页一一对应，
+       不会出现「sitemap 列了不存在的页」或者「归档了却没进 sitemap」。
+    """
+    return archive.sitemap_entries()
 
 
 def build_robots():
@@ -64,18 +74,7 @@ def build_robots():
 
 
 def build_sitemap():
-    day = bj_day()
-    parts = ['<?xml version="1.0" encoding="UTF-8"?>',
-             '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
-    for url, prio, _note in pages():
-        parts.append("  <url>")
-        parts.append("    <loc>%s</loc>" % url)
-        parts.append("    <lastmod>%s</lastmod>" % day)
-        parts.append("    <changefreq>daily</changefreq>")
-        parts.append("    <priority>%.1f</priority>" % prio)
-        parts.append("  </url>")
-    parts.append("</urlset>")
-    return "\n".join(parts) + "\n"
+    return archive.sitemap_xml()
 
 
 def write_files():
@@ -107,13 +106,20 @@ def fetch(url):
 
 def check():
     print("--- 线上现状 ---")
-    for name in ("/robots.txt", "/sitemap-data.xml", "/wp-sitemap.xml"):
+    urls = ["/robots.txt", "/sitemap-data.xml", "/wp-sitemap.xml", "/football/archive/"]
+    days = archive.sorted_days()
+    if days:
+        urls.append("/football/%s/" % days[0])      # 最新一天的归档页
+    for name in urls:
         try:
             st, body = fetch(SITE + name)
             head = body.strip().splitlines()[:3]
-            print("%-20s HTTP %s  len=%d  首行=%s" % (name, st, len(body), head[0][:70] if head else ""))
+            print("%-24s HTTP %s  len=%d  首行=%s"
+                  % (name, st, len(body), head[0][:70] if head else ""))
+        except urllib.error.HTTPError as e:
+            print("%-24s HTTP %s（还没上线？）" % (name, e.code))
         except Exception as e:
-            print("%-20s ERR %s" % (name, e))
+            print("%-24s ERR %s" % (name, e))
 
 
 def upload():
