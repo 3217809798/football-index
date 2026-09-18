@@ -32,8 +32,10 @@ concurrency:
   group: spdex-publish
   cancel-in-progress: false
 
+# contents: write 只给「回写数据快照到仓库」那一步用（见下面同名步骤）。
+# 用 GitHub 自动注入的 GITHUB_TOKEN，不需要额外的 Personal Access Token。
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   publish:
@@ -89,6 +91,39 @@ jobs:
           set -e
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           exit 0
+
+      # 把本轮抓到的新数据回写仓库（2026-09-18 加固）：
+      #   CI 每次都是全新 checkout，所谓「保留上一份」恢复的其实是**仓库里提交的那份快照**。
+      #   仓库里的快照越旧，一旦某轮抓取失败仍把数据传上去，线上就被倒退得越多
+      #   （2026-09-18 的真实事故：仓库停在 09-17，晚上的失败轮次把线上的当天数据覆盖了）。
+      #   回写之后，仓库快照最多只落后一轮（≈20 分钟），任何意外上传最多倒退一轮。
+      #   只有 publish.py 写的 .publish-state 里 data_ok=1（本轮真抓到可上线数据）才提交；
+      #   服务时段外 SKIP、抓取失败、只是重传页面文件 —— 这几种情况一律不提交。
+      - name: 回写数据快照到仓库
+        if: always()
+        run: |
+          set -e
+          if [ ! -f .publish-state ]; then
+            echo "没有 .publish-state（本轮没跑到写状态那一步）→ 跳过回写"
+            exit 0
+          fi
+          echo "--- .publish-state ---"
+          cat .publish-state
+          echo "----------------------"
+          if ! grep -q '^data_ok=1$' .publish-state; then
+            echo "本轮没有抓到可上线的新数据 → 跳过回写（仓库里的快照保持原样）"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bf.json bf-inline.js
+          if git diff --cached --quiet; then
+            echo "仓库里的快照与本轮数据一致，无需提交"
+            exit 0
+          fi
+          git commit -m "data: 竞彩必发快照 $(date -u '+%Y-%m-%d %H:%M') UTC"
+          # 并发已被 concurrency 串起来，正常不会撞；万一被 keepalive 之类抢先，rebase 后重试一次
+          git push || { echo "推送被拒，rebase 后重试一次"; git pull --rebase --autostash; git push; }
 
       # 把结果写进 Job Summary，Actions 页面直接能看，不用点进日志
       - name: 汇总结果
