@@ -59,6 +59,7 @@ publish.py —— 把竞彩指数页面发布到静态虚拟主机（如 90qu.co
 import argparse
 import datetime
 import hashlib
+import html
 import json
 import os
 import shutil
@@ -498,6 +499,87 @@ def sync_inline(use_spdex=True):
             log("内联快照生成失败 %s：%s" % (out, exc))
 
 
+# ---------------------------------------------------------------- 静态正文（给搜索引擎）
+# 搜索引擎的抓取程序不执行 JS，只能读到静态 HTML。本页的数据全部由脚本渲染，
+# 剥掉 <script> 后整页只剩 100 来字（实测），于是被判定成「空页」而收不进去。
+# 所以在打包这一步把当天数据直接渲染成真实的 <table> 写进发布包：爬虫读到完整表格，
+# 访客那边由页面脚本渲染出列表后把这块整块移除（见 index.html 的 dropSeoBody）。
+# 两边看到的内容互不重复，也不需要各自维护一份模板。
+#
+# ⚠️ 下面的注释标记是 index.html 里的替换锚点，改名必须两边同步改。
+STATIC_START = "<!--SEO_BODY_START-->"
+STATIC_END = "<!--SEO_BODY_END-->"
+
+
+def _e(v):
+    """HTML 转义。队名里有 [中超8] 这类方括号、联赛名可能带 &，不转义会破坏结构。"""
+    return html.escape("" if v is None else str(v), quote=True)
+
+
+def static_body(d):
+    """把一份抓取结果渲染成静态正文（每场一个小标题 + 完整表格）。
+
+    刻意不分页、不折叠、不排序：对爬虫来说，把后面的场次藏到别的 URL 上等于没收。
+    """
+    matches = d.get("matches") or []
+    cols = d.get("columns") or []
+    if not matches or not cols:
+        return ""
+
+    head = ('<tr><th class="itemcol">项</th>'
+            + "".join("<th>%s</th>" % _e(c) for c in cols) + "</tr>")
+
+    def row(r, extra=""):
+        tds = "".join("<td>%s</td>" % _e(v) for v in (r.get("v") or []))
+        return ('<tr><td class="teamname itemcell%s">%s</td>%s</tr>'
+                % (extra, _e(r.get("item")), tds))
+
+    parts = []
+    for m in matches:
+        body = "".join(row(r) for r in (m.get("rows") or []))
+        ou = m.get("ou") or []
+        if ou:                                     # 大小球盘：先一行分隔说明，再是它的三行
+            sep = "大小球"
+            if m.get("ouLine"):
+                sep += " " + str(m["ouLine"])
+            if m.get("ouTotal"):
+                sep += "　总成交量 " + str(m["ouTotal"])
+            body += ('<tr class="ou-sep"><td colspan="%d">%s</td></tr>'
+                     % (len(cols) + 1, _e(sep)))
+            body += "".join(row(r, " ou") for r in ou)
+
+        title = _e(m.get("leagueText") or m.get("league") or "")
+        if m.get("home"):
+            title += "　%s VS %s" % (_e(m.get("home")), _e(m.get("away")))
+        tail = []
+        if m.get("kickoff"):
+            tail.append("开赛时间 " + str(m["kickoff"]))
+        if m.get("total"):
+            tail.append("总成交量 " + str(m["total"]))
+        parts.append(
+            '<article class="seo-match">'
+            '<h3>%s<span class="t">%s</span></h3>'
+            '<div class="tablescroll"><table class="datatable">'
+            "<thead>%s</thead><tbody>%s</tbody></table></div>"
+            "</article>" % (title, _e(" · ".join(tail)), head, body))
+
+    lead = "下表为当日全部 %d 场赛事的必发指数明细，数据更新于 %s。" % (
+        len(matches), _e(d.get("fetchedAt") or "-"))
+    return ('<div class="seoblk" id="seoBody">'
+            "<h2>今日竞彩必发指数（共 %d 场）</h2>"
+            '<p class="seo-lead">%s</p>%s</div>'
+            % (len(matches), lead, "".join(parts)))
+
+
+def inject_static(page, block):
+    """把静态正文填进页面里的锚点。锚点缺失时原样返回，并给出提示。"""
+    a, b = page.find(STATIC_START), page.find(STATIC_END)
+    if a < 0 or b < 0 or b < a:
+        log("  提示：index.html 里没找到 %s / %s 锚点，静态正文未注入" % (STATIC_START, STATIC_END))
+        return page
+    return page[:a + len(STATIC_START)] + block + page[b:]
+
+
 def build_dist(use_spdex=True):
     sync_inline(use_spdex)
 
@@ -523,6 +605,20 @@ def build_dist(use_spdex=True):
         page = page.replace(flag, "var LIVE_PROBE = false;", 1)
     else:
         log("  提示：index.html 里没找到 %s，静态包仍会探测本地服务" % flag)
+
+    # 注入静态正文 —— 爬虫不执行 JS，没有这块页面在它们眼里就是空的（见 static_body）
+    seo_src = os.path.join(ROOT, "bf.json")
+    try:
+        with open(seo_src, encoding="utf-8") as f:
+            seo_d = sanitize(json.load(f))
+        block = static_body(seo_d)
+        page = inject_static(page, block)
+        if block:
+            log("  静态正文已注入（%d 场，%d 字节）"
+                % (len(seo_d.get("matches") or []), len(block)))
+    except Exception as exc:
+        log("  提示：静态正文生成失败（%s），本轮页面不含静态表格" % exc)
+
     with open(os.path.join(DIST, "index.html"), "w", encoding="utf-8", newline="\n") as f:
         f.write(page)
 
