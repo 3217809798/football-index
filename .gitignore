@@ -3,6 +3,8 @@
 publish.json
 # bifaw_conf.json 里含必发指数网账号密码；CI 里用 Secrets 注入环境变量
 bifaw_conf.json
+# baidu_push.json 里含百度主动推送 token；CI 里用 Secrets 注入环境变量
+baidu_push.json
 # _gh_token.txt 是 GitHub 的 Personal Access Token（用 _gh_push.py 推文件时用）
 _gh_token.txt
 
