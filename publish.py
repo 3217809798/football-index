@@ -14,6 +14,8 @@ publish.py —— 把竞彩指数页面发布到静态虚拟主机（如 90qu.co
     python publish.py --upload --only-data   # 日常更新用：只传数据文件
     python publish.py --no-fetch --upload    # 不抓取，用现有数据重新发布
     python publish.py --upload --page-only   # 只发页面文件，绝不碰数据（改版式立即上线用）
+    python publish.py --finalize --upload    # 归档定稿（每天 16:30 那一轮，见下）
+    python publish.py --archive-only         # 只补传归档页，不含定稿标记（手工维护入口）
     python publish.py --skip-bifaw      # 只跑超级指数（需配合 --with-spdex）
     python publish.py --with-spdex      # 临时恢复超级指数抓取
     python publish.py 20260913          # 指定期号（只对超级指数有意义）
@@ -22,6 +24,15 @@ publish.py —— 把竞彩指数页面发布到静态虚拟主机（如 90qu.co
    时段以外本脚本直接 RESULT: SKIP 退出（不抓取、不上传），线上因此停在
    当天最后一次成功更新上 —— 这就是「截止数据」。
    想手动强跑一次加 --ignore-window（多半仍会抓不到，因为源站那时确实不给数据）。
+
+⚠️ 归档定稿（--finalize）：按天归档页 /football/<日期>/ 只在**每天 16:30 定稿一次**，
+   服务时段内的各轮抓取**不再**生成归档。
+   为什么：16:00 之后源站就不给数据了（实测 DOM 抽到 0 场），当天数据的「最终版」
+   = 16:00 之前最后一次成功抓取 —— 所以把归档动作挪到截止之后一次做完，
+   页面上的时间口径也统一写成「<日期> 16:30 定稿」，不再写每轮各不相同的抓取时刻。
+   --finalize 的三条护栏：① 数据日期必须是北京今天；② 必须已过 16:00；
+   ③ 这一天还没定稿过（清单里没有 fin 标记）。`--force` 可越过全部护栏，手工补历史时用。
+   ⚠️ CI 跑 `--finalize --upload`；本地不加 --upload 只生成到 dist/，不联网。
 
 首次运行会生成 publish.json 配置模板，填好 FTP 信息后再跑 --upload。
 依赖：标准库（ftplib）；SFTP 需额外 pip install paramiko
@@ -39,6 +50,9 @@ publish.py —— 把竞彩指数页面发布到静态虚拟主机（如 90qu.co
     · 回写仓库 —— 抓到新数据时写 .publish-state（data_ok=1），CI 据此把 bf.json /
       bf-inline.js 提交回仓库。这样「上一份」永远只是上一轮（约 20 分钟前），
       而不是几天前 —— 万一哪轮失败仍误传了数据，线上最多倒退一轮。
+    · 归档定稿 —— 每天 16:30 那一轮不抓取，只用当天最后一份数据定稿归档页
+      （--finalize），成功后把 archive_ok=1 写进同一个 .publish-state，CI 据此把
+      .archive-index.json 提交回仓库（不提交的话，下一轮 / 次日就不知道今天已归档）。
     · 数据校验 —— 0 场或全部场次没解析出表格时，保留上一份数据不上传，
       避免一次抓取失败就把线上页面清空。
       校验以「当前启用的源」为准：竞彩必发失败就只保留它自己的上一份。
@@ -232,12 +246,16 @@ def service_state(now=None):
     return "open"
 
 
-def write_state(data_ok, why=""):
-    """把「本轮是否抓到可上线的新数据」写成 .publish-state（写不进去也无所谓）。
+def write_state(data_ok, why="", archive_ok=False):
+    """把「本轮产出了什么」写成 .publish-state（写不进去也无所谓）。
 
-    CI 里「把数据快照回写仓库」那一步只认这个文件里的 `data_ok=1`：
-    只有真抓到新数据才允许把 bf.json / bf-inline.js 提交回仓库 ——
-    否则会把「保留的上一份」（= 仓库里的旧快照）当成新数据又提交一遍。
+    CI 里两个步骤认这个文件：
+      · 「把数据快照回写仓库」只认 `data_ok=1`：只有真抓到新数据才允许把
+        bf.json / bf-inline.js 提交回仓库 —— 否则会把「保留的上一份」
+        （= 仓库里的旧快照）当成新数据又提交一遍。
+      · 同一个步骤也认 `archive_ok=1`：归档定稿轮（--finalize）不抓数据，
+        data_ok 恒为 0，但它产出的 `.archive-index.json` **必须**提交回仓库，
+        否则下一轮 / 次日就不知道「今天已经归档过」。
 
     背景：CI 每次都是全新 checkout，仓库里那份数据快照就是「上一份」。
     它是几天前的，抓取失败时一旦被传上去，线上数据就被倒退（2026-09-18 踩过）。
@@ -246,6 +264,7 @@ def write_state(data_ok, why=""):
     try:
         with open(STATE, "w", encoding="utf-8") as f:
             f.write("data_ok=%d\n" % (1 if data_ok else 0))
+            f.write("archive_ok=%d\n" % (1 if archive_ok else 0))
             f.write("why=%s\n" % (why or ""))
             f.write("at=%s\n" % now_bj().strftime("%Y-%m-%d %H:%M:%S"))
     except Exception:
@@ -652,22 +671,32 @@ def site_root_of(conf):
     return rd.rsplit("/", 1)[0] if "/" in rd else ""
 
 
-def build_archive_files(conf, d):
+def build_archive_files(conf, d, final=False):
     """生成当天归档页 + 归档索引页 + sitemap，返回 (上传清单, 新清单, 归档日期)。
 
-    ⚠️ 只在 `data_ok` 为真时调用。抓取失败时磁盘上的 bf.json 是「保留的上一份」，
-       CI 上那份更是仓库里提交的旧快照 —— 拿它生成归档，等于把旧内容重复写成
-       某一天的归档页，还会把过期日期塞进 sitemap 与归档索引。
+    ⚠️ 只在「数据确实是当天的」时候调用（--finalize 已把这件事校验过一遍）。
+       抓取失败时磁盘上的 bf.json 是「保留的上一份」，CI 上那份更是仓库里的旧快照 ——
+       拿它生成归档，等于把旧内容重复写成某一天的归档页，还会把过期日期塞进 sitemap。
     ⚠️ 返回的 days_new **不要在这里落盘**：要等上传成功之后再写（见 run()），
        否则一次上传失败就会在归档索引里留下线上并不存在的死链。
 
+    final=True 表示这是 16:30 的定稿轮：给这一天的清单项打上 `fin` 标记。
+    标记的作用是「这一天已经定稿过了」—— 16:50 的重试轮、以及之后任何轮次
+    看到它就直接跳过，同一份内容不会被反复上传。
+
     典型调用（run()）：
-        files, days, day = build_archive_files(conf, bf_data)
+        files, days, day = build_archive_files(conf, bf_data, final=True)
     """
     days = archive.load_days()
     days_new = dict(days)
     day = archive.data_day(d)
-    days_new[day] = archive.stat_of(d)
+    # 合并而不是整条替换：这天可能已经有 fin 标记（比如 16:50 的重试轮），
+    # 直接覆盖会把标记抹掉，于是又「没定稿」了。
+    entry = dict(days.get(day) or {})
+    entry.update(archive.stat_of(d))
+    if final:
+        entry["fin"] = True
+    days_new[day] = entry
 
     _, pages = archive.write_archive(d, days_new, DIST)
     files = archive.archive_files(pages)
@@ -1042,6 +1071,69 @@ def run(args):
         log("RESULT: OK - uploaded %d archive file(s) for %s" % (len(files), day))
         return 0
 
+    # ---------- -1b. --finalize：归档定稿（每天 16:30 那一轮） ----------
+    # 它和 --archive-only 一样排在服务时段闸门**之前** —— 因为它本来就只能在窗口外跑。
+    # 为什么单独一条路径：数据源 16:00 之后就不给数据了（实测 DOM 抽到 0 场），
+    # 当天数据的「最终版」只能是 16:00 之前最后一次成功抓取，所以归档不在服务时段内
+    # 零散地写，而是等到截止之后一次性定稿（页面上的时间口径也统一成 16:30）。
+    if args.finalize:
+        conf = load_conf()
+        if not conf:
+            log("RESULT: FAIL - publish.json is missing")
+            return 1
+        with open(os.path.join(ROOT, "bf.json"), encoding="utf-8") as f:
+            d = sanitize(json.load(f))
+        day = archive.data_day(d)
+        today = archive.bj_today()
+        days = archive.load_days()
+
+        # 三道护栏。不满足就什么都不做 —— 节假日没有赛事、当天源站一直没给数据，
+        # 都会走到这里，那是「无事可做」而不是故障，所以 SKIP 不影响 CI 判绿。
+        # --force 越过全部护栏：手工补历史归档时用（比如把旧版式的归档页按新口径重刷）。
+        if args.force:
+            log("--force：越过「必须是今天 / 已过 16:00 / 尚未定稿」三道护栏")
+        else:
+            if day != today:
+                log("磁盘上的 bf.json 是 %s 的数据，不是今天（%s）的 → 不归档"
+                    % (day, today))
+                log("RESULT: WARN - today's data was never captured; nothing to finalize")
+                return 2
+            if service_state() != "closed":
+                log("现在北京时间 %s，还没过数据截止（%02d:%02d）→ 当天数据还会变，不提前定稿"
+                    % (now_bj().strftime("%Y-%m-%d %H:%M"),
+                       SERVICE_CLOSE[0], SERVICE_CLOSE[1]))
+                log("RESULT: SKIP - before service close; not final yet")
+                return 0
+            if archive.is_final(days, day):
+                log("%s 的归档已经定稿过了 → 跳过（同一份内容不重复上传）" % day)
+                log("RESULT: SKIP - %s already finalized" % day)
+                return 0
+
+        log("归档定稿：数据采集于 %s → 按 %s %s 定稿"
+            % (d.get("fetchedAt") or "未知", day, archive.FINALIZE_HM))
+        files, days_new, day = build_archive_files(conf, d, final=True)
+
+        if not args.upload:
+            log("未加 --upload：归档页已生成到 dist/，没有联网上传")
+            log("RESULT: OK - built archive for %s (no --upload)" % day)
+            return 0
+
+        mode = conf.get("mode", "ftp")
+        ok = upload_sftp(conf["sftp"], files) if mode == "sftp" else upload_ftp(conf["ftp"], files)
+        if not ok:
+            log("RESULT: FAIL - archive upload failed")
+            return 1
+        # 上传成功之后才落清单：先记账后上传的话，一次失败就会在索引里
+        # 留下一个线上并不存在的死链。
+        archive.save_days(days_new)
+        # archive_ok=1 让 CI 的回写步骤把 .archive-index.json 提交回仓库。
+        # 这一步不抓数据，所以 data_ok 恒为 0（不能让 CI 以为抓到了新数据）。
+        write_state(False, "归档定稿 %s" % day, archive_ok=True)
+        log("归档清单已更新：%s（共 %d 天）"
+            % (os.path.basename(archive.INDEX_PATH), len(days_new)))
+        log("RESULT: OK - finalized %s: uploaded %d file(s)" % (day, len(files)))
+        return 0
+
     # ---------- 0. 服务时段闸门 ----------
     # 免费账号只在北京时间 9:00-16:00 能看到数据，其余时间源站直接回绝 → 抓取必失败。
     # 关键：CI 是全新 checkout，「保留上一份」恢复的其实是仓库里那份旧快照，
@@ -1156,21 +1248,11 @@ def run(args):
         log("RESULT: OK - data unchanged, nothing uploaded")
         return 0
 
-    # ---------- 3b. 按天归档页（第三档 SEO）----------
-    # 只在「本轮真抓到可上线的新数据」时生成。归档日期取自数据自己的 fetchedAt
-    # （publish 时段外根本走不到这里），拿旧快照生成只会把旧内容重复写成某一天的归档。
-    arch_files, days_new = [], None
-    if data_ok and not args.page_only and not args.no_fetch:
-        try:
-            with open(os.path.join(ROOT, "bf.json"), encoding="utf-8") as f:
-                arch_d = sanitize(json.load(f))
-            arch_files, days_new, _arch_day = build_archive_files(conf, arch_d)
-        except Exception as exc:
-            log("归档页生成失败（%s）→ 本轮不传归档，主页面发布不受影响" % exc)
-            arch_files, days_new = [], None
-    elif not data_ok:
-        log("本轮没抓到可上线的新数据 → 不生成归档页（避免把旧快照写成某一天的归档）")
-
+    # ---------- 3b. 按天归档页：本轮**不**生成 ----------
+    # 归档统一挪到每天 16:30 的定稿轮（--finalize，见上面 -1b）。
+    # 原因：数据源 16:00 之后就抓不到了，服务时段内任何时刻生成的归档都只是
+    # 「当日半成品」——改到截止后一次性定稿，页面上的时间口径才能统一成 16:30，
+    # 归档页也才真正代表「这一天最终长什么样」。
     files = []
     if not args.only_data:
         files.append((os.path.join(DIST, "index.html"), "index.html"))
@@ -1194,10 +1276,6 @@ def run(args):
         log("本轮没抓到可用数据（bifaw: %s%s）→ 只传页面文件，数据文件保持线上不变"
             % (bifaw_why, "，spdex 陈旧" if stale else ""))
 
-    # 归档页排在最后：万一子目录建不出来，前面的页面文件与数据文件也已经传完了
-    if data_ok and arch_files:
-        files.extend(arch_files)
-
     if not files:
         log("没有需要上传的文件")
         log("RESULT: WARN - nothing uploaded; bifaw fetch failed (%s)" % bifaw_why)
@@ -1209,15 +1287,6 @@ def run(args):
     if ok:
         if data_ok:
             write_fp(fp)                   # 只有传了数据才记指纹（且必须是上传成功之后）
-        # 归档清单必须**上传成功之后**才落盘：先记账后上传的话，一次上传失败
-        # 就会让 /football/archive/ 里多出一个线上并不存在的死链。
-        if arch_files and days_new:
-            try:
-                archive.save_days(days_new)
-                log("归档清单已更新：%s（共 %d 天）"
-                    % (os.path.basename(archive.INDEX_PATH), len(days_new)))
-            except Exception as exc:
-                log("归档清单写入失败（%s）：下一轮会重算，不影响本轮发布" % exc)
         log("上传完成 ✓  共 %d 个文件" % len(files))
         if bifaw_stale:
             log("RESULT: WARN - uploaded %d file(s); bifaw fetch failed (%s), kept previous data"
@@ -1256,6 +1325,12 @@ def main():
                     help="只上传按天归档页 / 归档索引 / sitemap，绝不碰主页与数据文件。"
                          "归档日期取自磁盘上 bf.json 的 fetchedAt —— 先确认那份数据是哪天的再跑。"
                          "首次上线验证 FTP 子目录、或某天归档上传失败后单独补一次时用")
+    ap.add_argument("--finalize", action="store_true",
+                    help="归档定稿（CI 每天 16:30 那一轮）：不抓取，用磁盘上 bf.json 生成归档页、"
+                         "归档索引与 sitemap 并上传，同时给这天打上「已定稿」标记。"
+                         "三条护栏：数据日期必须是北京今天、必须已过 16:00、这天还没定稿过；"
+                         "--force 越过全部护栏（手工补历史归档时用）。"
+                         "不加 --upload 只生成到 dist/，不联网")
     ap.add_argument("--check", action="store_true",
                     help="只自检 FTP/SFTP 配置（连接+进目录+试写），不上传数据")
     args = ap.parse_args()
