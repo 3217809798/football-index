@@ -17,6 +17,11 @@ publish.py —— 把竞彩指数页面发布到静态虚拟主机（如 90qu.co
     python publish.py --with-spdex      # 临时恢复超级指数抓取
     python publish.py 20260913          # 指定期号（只对超级指数有意义）
 
+⚠️ 服务时段（见 SERVICE_OPEN / SERVICE_CLOSE）：数据只在北京时间 9:00-16:00 提供。
+   时段以外本脚本直接 RESULT: SKIP 退出（不抓取、不上传），线上因此停在
+   当天最后一次成功更新上 —— 这就是「截止数据」。
+   想手动强跑一次加 --ignore-window（多半仍会抓不到，因为源站那时确实不给数据）。
+
 首次运行会生成 publish.json 配置模板，填好 FTP 信息后再跑 --upload。
 依赖：标准库（ftplib）；SFTP 需额外 pip install paramiko
      bifaw 抓取需要 playwright + ddddocr，且必须有显示环境（CI 用 xvfb）
@@ -28,6 +33,8 @@ publish.py —— 把竞彩指数页面发布到静态虚拟主机（如 90qu.co
 
 给「定时无人值守」准备的安全机制（都由本脚本内置，任务计划只需调用它）：
     · 加锁 —— 上一次没跑完就跳过本轮（电脑睡醒后任务计划可能补跑重叠）
+    · 服务时段 —— 只在北京时间 9:00-16:00 干活，其余时间什么都不动（见 SERVICE_OPEN）
+    · 不传半成品 —— 本轮没抓到数据就只传页面文件，绝不拿磁盘上的旧快照去覆盖线上
     · 数据校验 —— 0 场或全部场次没解析出表格时，保留上一份数据不上传，
       避免一次抓取失败就把线上页面清空。
       校验以「当前启用的源」为准：竞彩必发失败就只保留它自己的上一份。
@@ -38,7 +45,7 @@ publish.py —— 把竞彩指数页面发布到静态虚拟主机（如 90qu.co
         RESULT: OK    - uploaded N file(s) / data unchanged / package built
         RESULT: WARN  - 上传成功但超级指数数据是上一轮的（CI 出黄灯，不算故障）
         RESULT: FAIL  - 抓取不可用 / 配置缺失 / 上传失败（都会在下一轮自动重试）
-        RESULT: SKIP  - 上一次还没跑完（无害）
+        RESULT: SKIP  - 上一次还没跑完、或不在服务时段内（都无害）
       这一行在控制台上**不带时间戳**、以行首 "RESULT: " 开头，所以可以直接
         grep '^RESULT: ' 输出文件
       取到它（Windows 任务计划、GitHub Actions 都靠这个判读成败）。
@@ -47,6 +54,7 @@ publish.py —— 把竞彩指数页面发布到静态虚拟主机（如 90qu.co
     · 退出码：0 = 成功 / 1 = 配置缺失或上传失败 / 2 = 数据不完整（已保留旧数据）
 """
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -61,6 +69,22 @@ import time
 #    spdex_fetch.py 每轮都「一场都没抓到」。留着它只会每轮白跑一次并报 WARN。
 #    以后若拿到账号要改造登录抓取，用 --with-spdex 临时恢复（或把这里改成 True）。
 SPDEX_ENABLED = False
+
+# ---------------------------------------------------------------- 服务时段
+# 免费账号只能在「北京时间 9:00-16:00」看到数据；过了 16:00 源站页面会直接返回
+#   「你的会员服务是[免费版]，你能查看必发指数的时间为 9:00-16:00」
+# 抓取因此必然失败（0 场）。
+#
+# ⚠️ 为什么必须在**这一层**把住：CI 每次运行都是全新 checkout，本机没有「上一份好数据」，
+#    所谓「保留上一份」其实恢复的是**仓库里提交的那份快照**（可能好几天前）。
+#    于是 16 点后每轮失败都会把那份旧快照上传、覆盖掉下午刚抓到的新数据 ——
+#    2026-09-18 就踩了这个坑：下午 15:51 抓到 71 场并上传成功，
+#    晚上每一轮失败又把仓库里的 09-17 13:26 那份传上去，页面因此显示「昨天的数据」。
+#
+# 所以规则改成：**服务时段以外，一个文件都不动**。线上就停在当天 16:00 前
+# 最后一次成功更新的那份 —— 这正是「截止数据」想要的效果。
+SERVICE_OPEN = (9, 0)     # 北京时间开服：09:00
+SERVICE_CLOSE = (16, 0)   # 北京时间截止：16:00（到点即止，不再抓取/上传）
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 if ROOT not in sys.path:
@@ -154,7 +178,7 @@ def log(msg):
 def acquire_lock():
     """防止两次任务重叠运行。
 
-    抓一次约 10 秒、间隔 15 分钟，正常不会撞；但电脑睡醒后任务计划可能补跑，
+    抓一次约 10 秒、间隔 20 分钟，正常不会撞；但电脑睡醒后任务计划可能补跑，
     两次同时改 data.json / 同时连 FTP 会互相打架，所以还是加一道锁。
     """
     if os.path.exists(LOCK):
@@ -176,6 +200,27 @@ def release_lock():
         os.remove(LOCK)
     except Exception:
         pass
+
+
+def now_bj():
+    """当前北京时间（aware datetime）。
+
+    ⚠️ 刻意**不依赖本机时区**：CI runner 默认 UTC（虽然 workflow 里设了 TZ，
+    但本地 Windows 也可能跑），用 UTC 现算 +8 才能保证「几点中的闭包」在任何
+    机器上都一致。
+    """
+    return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=8)
+
+
+def service_state(now=None):
+    """相对服务时段的状态：before（还没开）/ open（服务中）/ closed（已截止）"""
+    bj = now or now_bj()
+    hm = bj.hour * 60 + bj.minute
+    if hm < SERVICE_OPEN[0] * 60 + SERVICE_OPEN[1]:
+        return "before"
+    if hm >= SERVICE_CLOSE[0] * 60 + SERVICE_CLOSE[1]:
+        return "closed"
+    return "open"
 
 
 def check_data(path):
@@ -278,6 +323,59 @@ def check_bifaw(path):
     return True, note
 
 
+def parse_kickoff_day(text, today):
+    """从形如 \"09-18 20:15\" 的开赛时间里取出日期（只要 MM-DD）。
+
+    kickoff 里没有年份，所以按「离今天最近的那个年份」还原，
+    避免跨年（12-31 → 次年 01-01）时把日期算反。
+    """
+    t = (text or "").strip()
+    if len(t) < 5:
+        return None
+    try:
+        mm, dd = int(t[0:2]), int(t[3:5])
+    except ValueError:
+        return None
+    try:
+        d = datetime.date(today.year, mm, dd)
+    except ValueError:                      # 2-29 之类
+        return None
+    # 同一 MM-DD 在 ±1 年里也成立，取离今天更近的那个
+    for delta in (-1, 1):
+        try:
+            cand = datetime.date(today.year + delta, mm, dd)
+        except ValueError:
+            continue
+        if abs((cand - today).days) < abs((d - today).days):
+            d = cand
+    return d
+
+
+def check_bifaw_day(path):
+    """抓回来的是不是「今天或以后」的赛事列表。
+
+    源站偶尔会留着昨天的列表（比如早上还没刷新），那种数据抽出来有场、有指数，
+    常规校验全通过，传上去页面就显示成昨天的数据 —— 正是用户会立刻发现的那类问题。
+    这里拦一道：所有能解析的开赛日期里，最晚的一天如果早于今天，就判不可用。
+
+    ⚠️ 这个函数**只在刚抓完时调用**，不要塞进 check_bifaw()：
+    后者还负责给「磁盘上已有的旧文件」做可上线校验，加进去会让历史快照也判失败。
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            ms = json.load(f).get("matches") or []
+    except Exception as exc:
+        return False, "读取失败：%s" % exc
+    today = now_bj().date()
+    days = [d for d in (parse_kickoff_day(m.get("kickoff"), today) for m in ms) if d]
+    if not days:
+        return True, "没有可判断的开赛日期（放行）"
+    latest = max(days)
+    if latest < today:
+        return False, "最晚开赛日是 %s，早于今天 %s（源站可能还没刷新到今天）" % (latest, today)
+    return True, "最晚开赛日 %s" % latest
+
+
 def fetch_bifaw():
     """抓竞彩必发数据。失败时**保留上一份 bifaw.json 继续发布**，但必须把失败
     往外传（调用方据此报 WARN）—— 否则抓取明明挂了、日志却一路 OK，
@@ -311,6 +409,9 @@ def fetch_bifaw():
         rc = 1
 
     ok, why = check_bifaw(path) if rc == 0 else (False, "抓取退出码 %s" % rc)
+    if ok:
+        # 再验一遍是不是「今天」的列表，挡住源站没刷新时留下的昨日残留
+        ok, why = check_bifaw_day(path)
     if not ok:
         log("竞彩必发数据不可用（%s）→ 保留上一份 bf.json" % why)
         if had and os.path.exists(backup):
@@ -676,6 +777,23 @@ def run(args):
     use_spdex = bool(args.with_spdex or SPDEX_ENABLED)
     stale = False       # 本轮 spdex 没抓到可用的，线上保留的是上一份
 
+    # ---------- 0. 服务时段闸门 ----------
+    # 免费账号只在北京时间 9:00-16:00 能看到数据，其余时间源站直接回绝 → 抓取必失败。
+    # 关键：CI 是全新 checkout，「保留上一份」恢复的其实是仓库里那份旧快照，
+    # 所以在时段外**一个文件都不能传**，让线上停在当天最后一次成功更新上。
+    if not args.no_fetch and not args.ignore_window:
+        st = service_state()
+        if st != "open":
+            bj = now_bj()
+            log("现在北京时间 %s（更新时间 %02d:%02d-%02d:%02d）→ 本轮不抓取、不上传，"
+                "线上保持当天最后一次有效更新"
+                % (bj.strftime("%Y-%m-%d %H:%M"),
+                   SERVICE_OPEN[0], SERVICE_OPEN[1],
+                   SERVICE_CLOSE[0], SERVICE_CLOSE[1]))
+            log("RESULT: SKIP - outside service window (09:00-16:00 Beijing)")
+            return 0
+        log("北京时间 %s，服务时段内，开始抓取" % now_bj().strftime("%Y-%m-%d %H:%M"))
+
     # ---------- 1. 抓取超级指数（已下线，默认跳过） ----------
     if not use_spdex:
         log("超级指数（spdex）已下线，本轮跳过该源")
@@ -755,14 +873,18 @@ def run(args):
         log("RESULT: FAIL - publish.json is missing")
         return 1
 
-    # ---------- 3. 数据没变化就不重复上传 ----------
+    # ---------- 3. 决定本轮传什么 ----------
+    # ⚠️ 关键规则：**只有本轮真抓到新数据，才传数据文件**。
+    #    抓取失败时磁盘上的 bf.json 是「保留的上一份」，而 CI 每次都是全新 checkout，
+    #    这份「上一份」其实是仓库里提交的旧快照 —— 传上去等于把线上刚更新的数据
+    #    倒退回好几天前（2026-09-18 踩过：下午 71 场被晚间的旧快照覆盖）。
+    #    页面文件（index.html）不受影响，改了页面照样能上线。
     data_files = active_data_files(use_spdex)
+    data_ok = bifaw_ok and not stale
     fp = fingerprint(*data_files)
-    if args.only_data and not args.force and fp and fp == read_fp():
+
+    if data_ok and args.only_data and not args.force and fp and fp == read_fp():
         log("数据与上次上传一致，跳过上传（要强制上传加 --force）")
-        if bifaw_stale:
-            log("RESULT: WARN - data unchanged; bifaw fetch failed (%s)" % bifaw_why)
-            return 2
         log("RESULT: OK - data unchanged, nothing uploaded")
         return 0
 
@@ -770,22 +892,33 @@ def run(args):
     if not args.only_data:
         files.append((os.path.join(DIST, "index.html"), "index.html"))
         files.append((os.path.join(DIST, ".htaccess"), ".htaccess"))
-        snaps = ["bf-inline.js"] + (["data-inline.js"] if use_spdex else [])
-        for snap in snaps:
-            p = os.path.join(DIST, snap)
-            if os.path.exists(p):
-                files.append((p, snap))
-    for p in data_files:
-        name = os.path.basename(p)
-        packed = os.path.join(DIST, name)
-        if os.path.exists(packed):
-            files.append((packed, name))
+    if data_ok:
+        if not args.only_data:
+            snaps = ["bf-inline.js"] + (["data-inline.js"] if use_spdex else [])
+            for snap in snaps:
+                p = os.path.join(DIST, snap)
+                if os.path.exists(p):
+                    files.append((p, snap))
+        for p in data_files:
+            name = os.path.basename(p)
+            packed = os.path.join(DIST, name)
+            if os.path.exists(packed):
+                files.append((packed, name))
+    else:
+        log("本轮没抓到可用数据（bifaw: %s%s）→ 只传页面文件，数据文件保持线上不变"
+            % (bifaw_why, "，spdex 陈旧" if stale else ""))
+
+    if not files:
+        log("没有需要上传的文件")
+        log("RESULT: WARN - nothing uploaded; bifaw fetch failed (%s)" % bifaw_why)
+        return 2
 
     # ---------- 4. 上传 ----------
     mode = conf.get("mode", "ftp")
     ok = upload_sftp(conf["sftp"], files) if mode == "sftp" else upload_ftp(conf["ftp"], files)
     if ok:
-        write_fp(fp)                       # 只有上传成功才记指纹
+        if data_ok:
+            write_fp(fp)                   # 只有传了数据才记指纹（且必须是上传成功之后）
         log("上传完成 ✓  共 %d 个文件" % len(files))
         if bifaw_stale:
             log("RESULT: WARN - uploaded %d file(s); bifaw fetch failed (%s), kept previous data"
@@ -814,6 +947,8 @@ def main():
     ap.add_argument("--with-spdex", action="store_true",
                     help="临时恢复超级指数（c.spdex.com）抓取（该站已改版为会员站，默认关闭）")
     ap.add_argument("--force", action="store_true", help="数据没变化也强制上传")
+    ap.add_argument("--ignore-window", action="store_true",
+                    help="忽略 9:00-16:00 服务时段限制（想手动补一次时用，注意此时通常抓不到）")
     ap.add_argument("--check", action="store_true",
                     help="只自检 FTP/SFTP 配置（连接+进目录+试写），不上传数据")
     args = ap.parse_args()
