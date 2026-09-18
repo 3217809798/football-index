@@ -60,12 +60,13 @@ publish.py —— 把竞彩指数页面发布到静态虚拟主机（如 90qu.co
 import argparse
 import datetime
 import hashlib
-import html
 import json
 import os
 import shutil
 import sys
 import time
+
+import archive          # 按天归档页（/football/2026-09-19/）+ sitemap URL 清单的唯一来源
 
 # ---------------------------------------------------------------- 数据源开关
 # ⛔ 超级指数（c.spdex.com）：2026-09-16 起下线。
@@ -512,64 +513,15 @@ STATIC_START = "<!--SEO_BODY_START-->"
 STATIC_END = "<!--SEO_BODY_END-->"
 
 
-def _e(v):
-    """HTML 转义。队名里有 [中超8] 这类方括号、联赛名可能带 &，不转义会破坏结构。"""
-    return html.escape("" if v is None else str(v), quote=True)
-
-
 def static_body(d):
     """把一份抓取结果渲染成静态正文（每场一个小标题 + 完整表格）。
 
-    刻意不分页、不折叠、不排序：对爬虫来说，把后面的场次藏到别的 URL 上等于没收。
+    ⚠️ 渲染本体 2026-09-19 搬到了 archive.py（见 archive.match_articles）：
+       归档页要用**同一份**表格模板，两处各写一份迟早走样。
+       主页注入的 markup 与归档页逐字节一致，index.html 的 .seoblk / .datatable
+       样式两边通用，这里只留一个转发。
     """
-    matches = d.get("matches") or []
-    cols = d.get("columns") or []
-    if not matches or not cols:
-        return ""
-
-    head = ('<tr><th class="itemcol">项</th>'
-            + "".join("<th>%s</th>" % _e(c) for c in cols) + "</tr>")
-
-    def row(r, extra=""):
-        tds = "".join("<td>%s</td>" % _e(v) for v in (r.get("v") or []))
-        return ('<tr><td class="teamname itemcell%s">%s</td>%s</tr>'
-                % (extra, _e(r.get("item")), tds))
-
-    parts = []
-    for m in matches:
-        body = "".join(row(r) for r in (m.get("rows") or []))
-        ou = m.get("ou") or []
-        if ou:                                     # 大小球盘：先一行分隔说明，再是它的三行
-            sep = "大小球"
-            if m.get("ouLine"):
-                sep += " " + str(m["ouLine"])
-            if m.get("ouTotal"):
-                sep += "　总成交量 " + str(m["ouTotal"])
-            body += ('<tr class="ou-sep"><td colspan="%d">%s</td></tr>'
-                     % (len(cols) + 1, _e(sep)))
-            body += "".join(row(r, " ou") for r in ou)
-
-        title = _e(m.get("leagueText") or m.get("league") or "")
-        if m.get("home"):
-            title += "　%s VS %s" % (_e(m.get("home")), _e(m.get("away")))
-        tail = []
-        if m.get("kickoff"):
-            tail.append("开赛时间 " + str(m["kickoff"]))
-        if m.get("total"):
-            tail.append("总成交量 " + str(m["total"]))
-        parts.append(
-            '<article class="seo-match">'
-            '<h3>%s<span class="t">%s</span></h3>'
-            '<div class="tablescroll"><table class="datatable">'
-            "<thead>%s</thead><tbody>%s</tbody></table></div>"
-            "</article>" % (title, _e(" · ".join(tail)), head, body))
-
-    lead = "下表为当日全部 %d 场赛事的必发指数明细，数据更新于 %s。" % (
-        len(matches), _e(d.get("fetchedAt") or "-"))
-    return ('<div class="seoblk" id="seoBody">'
-            "<h2>今日竞彩必发指数（共 %d 场）</h2>"
-            '<p class="seo-lead">%s</p>%s</div>'
-            % (len(matches), lead, "".join(parts)))
+    return archive.seo_block(d)
 
 
 def inject_static(page, block):
@@ -620,6 +572,21 @@ def build_dist(use_spdex=True):
     except Exception as exc:
         log("  提示：静态正文生成失败（%s），本轮页面不含静态表格" % exc)
 
+    # 历史归档内链（第三档）：常驻在 .pageintro 里，**不会**被页面的 dropSeoBody 移除，
+    # 所以访客也能点进去 —— 这是爬虫发现历史归档页的主入口。
+    # 它只是导航、不依赖今天的抓取结果，所以抓取失败的那几轮照样注入。
+    try:
+        links = archive.links_html()
+        if links:
+            page, hit = archive.inject_links(page, links)
+            if hit:
+                log("  历史归档内链已注入（共 %d 天归档）" % len(archive.sorted_days()))
+            else:
+                log("  提示：index.html 里没找到 %s / %s 锚点，历史内链未注入"
+                    % (archive.LINKS_START, archive.LINKS_END))
+    except Exception as exc:
+        log("  提示：历史内链生成失败（%s）" % exc)
+
     with open(os.path.join(DIST, "index.html"), "w", encoding="utf-8", newline="\n") as f:
         f.write(page)
 
@@ -653,6 +620,13 @@ def build_dist(use_spdex=True):
     with open(os.path.join(DIST, ".htaccess"), "w", encoding="utf-8", newline="\n") as f:
         f.write(HTACCESS)
 
+    # dist/ 是跨轮累积的：清掉过期的归档日期目录，免得本地无限长胖。
+    # 服务器上的历史归档不在 dist/ 里生成，所以这一句删不到它们。
+    for _n in os.listdir(DIST):
+        _p = os.path.join(DIST, _n)
+        if os.path.isdir(_p) and archive.is_day_dir(_n):
+            shutil.rmtree(_p, ignore_errors=True)
+
     size = sum(os.path.getsize(os.path.join(DIST, n)) for n in os.listdir(DIST))
     bits = []
     for p in data_files:
@@ -664,6 +638,60 @@ def build_dist(use_spdex=True):
             bits.append("%s 读取失败" % os.path.basename(p))
     log("发布包已生成 -> dist/  （%.1f KB，%s）" % (size / 1024.0, " + ".join(bits)))
     return True
+
+
+# ---------------------------------------------------------------- 按天归档页
+def site_root_of(conf):
+    """发布目录的上一级（也就是站点根），sitemap 要放那儿。
+
+    归档页在 remote_dir/football/<date>/ 下面，而 sitemap-data.xml 必须在站点根
+    （robots.txt 里写的是 https://90qu.com/sitemap-data.xml），所以得往上走一层。
+    """
+    c = conf.get("sftp" if conf.get("mode", "ftp") == "sftp" else "ftp") or {}
+    rd = str(c.get("remote_dir") or "").rstrip("/")
+    return rd.rsplit("/", 1)[0] if "/" in rd else ""
+
+
+def build_archive_files(conf, d):
+    """生成当天归档页 + 归档索引页 + sitemap，返回 (上传清单, 新清单, 归档日期)。
+
+    ⚠️ 只在 `data_ok` 为真时调用。抓取失败时磁盘上的 bf.json 是「保留的上一份」，
+       CI 上那份更是仓库里提交的旧快照 —— 拿它生成归档，等于把旧内容重复写成
+       某一天的归档页，还会把过期日期塞进 sitemap 与归档索引。
+    ⚠️ 返回的 days_new **不要在这里落盘**：要等上传成功之后再写（见 run()），
+       否则一次上传失败就会在归档索引里留下线上并不存在的死链。
+
+    典型调用（run()）：
+        files, days, day = build_archive_files(conf, bf_data)
+    """
+    days = archive.load_days()
+    days_new = dict(days)
+    day = archive.data_day(d)
+    days_new[day] = archive.stat_of(d)
+
+    _, pages = archive.write_archive(d, days_new, DIST)
+    files = archive.archive_files(pages)
+
+    # sitemap 也在这里刷新：归档日一变、sitemap 不跟着变，百度就永远发现不了新归档页。
+    # 它挂在站点根（比 remote_dir 高一层），所以用 abs: 规格把它送出 football/ 目录。
+    seo_dir = os.path.join(DIST, "seo")
+    os.makedirs(seo_dir, exist_ok=True)
+    sp = os.path.join(seo_dir, "sitemap-data.xml")
+    with open(sp, "w", encoding="utf-8", newline="\n") as f:
+        f.write(archive.sitemap_xml(days_new))
+    root = site_root_of(conf)
+    if root:
+        files.append((sp, "sitemap-data.xml", "abs:" + root))
+    else:
+        log("  提示：publish.json 里的 remote_dir 看不出站点根，本轮不更新 sitemap")
+
+    fetched = str((d or {}).get("fetchedAt") or "")
+    if fetched[:10] != day:
+        log("  ⚠️ 数据日期(%s)与归档目录(%s)不一致，已按数据自己的日期归档" % (fetched[:10], day))
+    n = len(d.get("matches") or [])
+    log("归档页已生成：/football/%s/（%d 场，涉及 %d 个联赛）；归档索引共 %d 天；sitemap 已刷新"
+        % (day, n, len(days_new[day].get("lg") or []), len(days_new)))
+    return files, days_new, day
 
 
 # ---------------------------------------------------------------- 配置
@@ -700,6 +728,60 @@ def ftp_put(ftp, local, remote_dir, name):
     except Exception:
         pass
     ftp.rename(tmp, final)
+
+
+# ---------------------------------------------------------------- 上传目录规格
+# 2026-09-19 起 files 里的每一项可以是两元组或三元组：
+#   (本地, 远程文件名)                 → 传进 remote_dir（老行为，不变）
+#   (本地, 远程文件名, "2026-09-19")   → 传进 remote_dir/2026-09-19/（归档页）
+#   (本地, 远程文件名, "abs:/a/b")     → 传进该**绝对**目录（sitemap 要放站点根，
+#                                        比 remote_dir 高一层，用相对路径表达不了）
+# 归档页与 sitemap 都靠这个机制，所以 upload_ftp / upload_sftp 都要认三元组。
+def norm_files(files):
+    """统一成 (local, name, 目录规格) 三元组。"""
+    out = []
+    for item in files:
+        if len(item) == 2:
+            out.append((item[0], item[1], ""))
+        else:
+            out.append((item[0], item[1], item[2] or ""))
+    return out
+
+
+def resolve_remote(rd, spec):
+    """把目录规格解析成 FTP/SFTP 上的目标目录（绝对路径）。"""
+    if not spec:
+        return rd.rstrip("/")
+    spec = str(spec)
+    if spec.startswith("abs:"):
+        return spec[4:].rstrip("/")
+    return rd.rstrip("/") + "/" + spec.strip("/")
+
+
+def ftp_ensure_subdir(ftp, base, sub):
+    """确保 base 下的子目录 sub 存在，返回可写的目录路径。
+
+    ⚠️ DirectAdmin / cPanel 这类虚拟主机的 FTP 服务端对「绝对路径 MKD」支持不一致，
+    所以先试绝对路径，失败再 cwd(base) 用相对名建一遍 —— 谁通用谁。
+    """
+    sub = sub.strip("/")
+    d = base.rstrip("/") + "/" + sub
+    try:
+        ftp.mkd(d)
+    except Exception:
+        pass
+    try:
+        ftp.cwd(d)
+        return d
+    except Exception:
+        pass
+    ftp.cwd(base)
+    try:
+        ftp.mkd(sub)
+    except Exception:
+        pass
+    ftp.cwd(sub)
+    return ftp.pwd()
 
 
 def check_ftp(cfg):
@@ -825,15 +907,31 @@ def upload_ftp(cfg, files):
     ftp.set_pasv(True)
     log("登录成功，当前目录：%s" % ftp.pwd())
 
-    rd = cfg["remote_dir"]
+    rd = cfg["remote_dir"].rstrip("/")
     ftp_ensure_dir(ftp, rd)
     ftp.cwd(rd)
     log("进入远程目录：%s" % ftp.pwd())
 
     try:
-        for local, name in files:
-            ftp_put(ftp, local, rd, name)
-            log("  已上传 %s (%.1f KB)" % (name, os.path.getsize(local) / 1024.0))
+        dirs = {}
+        for local, name, spec in norm_files(files):
+            if not spec:
+                target = rd                              # 老行为：直接进 remote_dir
+            else:
+                target = dirs.get(spec)
+                if target is None:
+                    if str(spec).startswith("abs:"):
+                        target = resolve_remote(rd, spec)
+                        ftp_ensure_dir(ftp, target)      # 目标一般已存在，MKD 失败被忽略
+                        ftp.cwd(target)                  # 走一遍确认这目录真能用
+                    else:
+                        target = ftp_ensure_subdir(ftp, rd, spec)
+                    dirs[spec] = target
+                    ftp.cwd(rd)                          # 恢复当前目录，下次从 rd 出发
+            ftp_put(ftp, local, target, name)
+            log("  已上传 %s (%.1f KB)%s"
+                % (name, os.path.getsize(local) / 1024.0,
+                   ("  -> %s/" % str(spec).replace("abs:", "")) if spec else ""))
     except Exception as exc:
         log("上传中断：%s" % exc)
         return False
@@ -846,6 +944,17 @@ def upload_ftp(cfg, files):
 
 
 # ---------------------------------------------------------------- SFTP
+def sftp_ensure_dir(sf, path):
+    """逐级确保 SFTP 目录存在（与 ftp_ensure_dir 同义，SFTP 的 API 不一样）。"""
+    cur = ""
+    for p in [x for x in path.strip("/").split("/") if x]:
+        cur += "/" + p
+        try:
+            sf.stat(cur)
+        except IOError:
+            sf.mkdir(cur)
+
+
 def upload_sftp(cfg, files):
     try:
         import paramiko
@@ -866,24 +975,29 @@ def upload_sftp(cfg, files):
     sf = cli.open_sftp()
 
     rd = cfg["remote_dir"].rstrip("/")
-    cur = ""
-    for p in [x for x in rd.split("/") if x]:
-        cur += "/" + p
-        try:
-            sf.stat(cur)
-        except IOError:
-            sf.mkdir(cur)
+    sftp_ensure_dir(sf, rd)
 
     try:
-        for local, name in files:
-            tmp = rd + "/" + name + ".tmp"
+        dirs = {}
+        for local, name, spec in norm_files(files):
+            if not spec:
+                target = rd
+            else:
+                target = dirs.get(spec)
+                if target is None:
+                    target = resolve_remote(rd, spec)
+                    sftp_ensure_dir(sf, target)
+                    dirs[spec] = target
+            tmp = target + "/" + name + ".tmp"
             sf.put(local, tmp)
             try:
-                sf.remove(rd + "/" + name)
+                sf.remove(target + "/" + name)
             except IOError:
                 pass
-            sf.rename(tmp, rd + "/" + name)
-            log("  已上传 %s (%.1f KB)" % (name, os.path.getsize(local) / 1024.0))
+            sf.rename(tmp, target + "/" + name)
+            log("  已上传 %s (%.1f KB)%s"
+                % (name, os.path.getsize(local) / 1024.0,
+                   ("  -> %s/" % str(spec).replace("abs:", "")) if spec else ""))
     except Exception as exc:
         log("上传中断：%s" % exc)
         return False
@@ -899,6 +1013,34 @@ def run(args):
     data_path = os.path.join(ROOT, "data.json")
     use_spdex = bool(args.with_spdex or SPDEX_ENABLED)
     stale = False       # 本轮 spdex 没抓到可用的，线上保留的是上一份
+
+    # ---------- -1. --archive-only：只补传归档页，绝不碰主页与数据文件 ----------
+    # 刻意排在时段闸门**之前**：它不抓取、也不改主页，是纯手工的维护入口。
+    # 两个用途：
+    #   ① 首次上线 / 换主机后，单独把归档页铺上去验证 FTP 能不能建子目录；
+    #   ② 某天归档那一步上传失败了，单独补一次 —— 不会碰到线上正在展示的当日数据。
+    # ⚠️ 归档日期取自磁盘上 bf.json 的 fetchedAt，所以**先确认那份数据是哪天的**再跑。
+    if args.archive_only:
+        conf = load_conf()
+        if not conf:
+            log("RESULT: FAIL - publish.json is missing")
+            return 1
+        with open(os.path.join(ROOT, "bf.json"), encoding="utf-8") as f:
+            d = sanitize(json.load(f))
+        log("--archive-only：按磁盘上 bf.json（数据时间 %s）生成归档，只传归档相关文件"
+            % (d.get("fetchedAt") or "未知"))
+        files, days_new, day = build_archive_files(conf, d)
+        mode = conf.get("mode", "ftp")
+        ok = upload_sftp(conf["sftp"], files) if mode == "sftp" else upload_ftp(conf["ftp"], files)
+        if not ok:
+            log("RESULT: FAIL - archive upload failed")
+            return 1
+        # 这一条路径是手工触发的、且已经传成功，所以直接落清单
+        archive.save_days(days_new)
+        log("归档清单已更新：%s（共 %d 天）"
+            % (os.path.basename(archive.INDEX_PATH), len(days_new)))
+        log("RESULT: OK - uploaded %d archive file(s) for %s" % (len(files), day))
+        return 0
 
     # ---------- 0. 服务时段闸门 ----------
     # 免费账号只在北京时间 9:00-16:00 能看到数据，其余时间源站直接回绝 → 抓取必失败。
@@ -1014,6 +1156,21 @@ def run(args):
         log("RESULT: OK - data unchanged, nothing uploaded")
         return 0
 
+    # ---------- 3b. 按天归档页（第三档 SEO）----------
+    # 只在「本轮真抓到可上线的新数据」时生成。归档日期取自数据自己的 fetchedAt
+    # （publish 时段外根本走不到这里），拿旧快照生成只会把旧内容重复写成某一天的归档。
+    arch_files, days_new = [], None
+    if data_ok and not args.page_only and not args.no_fetch:
+        try:
+            with open(os.path.join(ROOT, "bf.json"), encoding="utf-8") as f:
+                arch_d = sanitize(json.load(f))
+            arch_files, days_new, _arch_day = build_archive_files(conf, arch_d)
+        except Exception as exc:
+            log("归档页生成失败（%s）→ 本轮不传归档，主页面发布不受影响" % exc)
+            arch_files, days_new = [], None
+    elif not data_ok:
+        log("本轮没抓到可上线的新数据 → 不生成归档页（避免把旧快照写成某一天的归档）")
+
     files = []
     if not args.only_data:
         files.append((os.path.join(DIST, "index.html"), "index.html"))
@@ -1037,6 +1194,10 @@ def run(args):
         log("本轮没抓到可用数据（bifaw: %s%s）→ 只传页面文件，数据文件保持线上不变"
             % (bifaw_why, "，spdex 陈旧" if stale else ""))
 
+    # 归档页排在最后：万一子目录建不出来，前面的页面文件与数据文件也已经传完了
+    if data_ok and arch_files:
+        files.extend(arch_files)
+
     if not files:
         log("没有需要上传的文件")
         log("RESULT: WARN - nothing uploaded; bifaw fetch failed (%s)" % bifaw_why)
@@ -1048,6 +1209,15 @@ def run(args):
     if ok:
         if data_ok:
             write_fp(fp)                   # 只有传了数据才记指纹（且必须是上传成功之后）
+        # 归档清单必须**上传成功之后**才落盘：先记账后上传的话，一次上传失败
+        # 就会让 /football/archive/ 里多出一个线上并不存在的死链。
+        if arch_files and days_new:
+            try:
+                archive.save_days(days_new)
+                log("归档清单已更新：%s（共 %d 天）"
+                    % (os.path.basename(archive.INDEX_PATH), len(days_new)))
+            except Exception as exc:
+                log("归档清单写入失败（%s）：下一轮会重算，不影响本轮发布" % exc)
         log("上传完成 ✓  共 %d 个文件" % len(files))
         if bifaw_stale:
             log("RESULT: WARN - uploaded %d file(s); bifaw fetch failed (%s), kept previous data"
@@ -1082,6 +1252,10 @@ def main():
                          "随时传都安全；数据文件则必须等窗口内抓到新数据才允许传")
     ap.add_argument("--ignore-window", action="store_true",
                     help="忽略 9:00-16:00 服务时段限制（想手动补一次时用，注意此时通常抓不到）")
+    ap.add_argument("--archive-only", action="store_true",
+                    help="只上传按天归档页 / 归档索引 / sitemap，绝不碰主页与数据文件。"
+                         "归档日期取自磁盘上 bf.json 的 fetchedAt —— 先确认那份数据是哪天的再跑。"
+                         "首次上线验证 FTP 子目录、或某天归档上传失败后单独补一次时用")
     ap.add_argument("--check", action="store_true",
                     help="只自检 FTP/SFTP 配置（连接+进目录+试写），不上传数据")
     args = ap.parse_args()
