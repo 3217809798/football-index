@@ -127,6 +127,7 @@ a:hover{color:#c60}
   background:#eef1f5;color:#7d8794;font-weight:700}
 .stats .age.warn{background:#fff3da;color:#a06a2c}
 .stats .age.bad{background:#fdecec;color:#c0392b}
+.stats .age.info{background:#eaf2fb;color:#33597f}
 
 /* ============ 数据过期提示条 ============
    放进 sticky 工具条里独占一行，滚动时始终可见 —— 目的就是别再让人
@@ -137,6 +138,9 @@ a:hover{color:#c60}
   border-radius:5px;padding:7px 10px;font-size:12.5px;line-height:1.55
 }
 .stalebar.bad{border-color:#e2948f;background:#fdecec;color:#a12a26}
+/* info = 今天已截止 / 还没到更新时间 —— 都是既定安排，不是故障，
+   所以用中性蓝色，别再用黄/红把数据说得像是坏掉了。 */
+.stalebar.info{border-color:#c3d4ea;background:#f2f7fd;color:#33597f}
 .stalebar b{font-weight:800}
 .stalebar button{
   font:inherit;font-size:12px;font-weight:700;cursor:pointer;
@@ -456,10 +460,46 @@ table.datatable{
   }
   var STALE_WARN = 3*3600*1000;    // 超过 3 小时：黄色提醒
   var STALE_BAD  = 12*3600*1000;   // 超过 12 小时：红色告警
+
+  /* ---------- 每日更新时间（北京时间 9:00-16:00）----------
+     数据提供方每天只在这段时间开放，16:00 之后发布端就不再抓取、不传任何文件，
+     线上就停在当天最后一次有效更新上 —— 这是**既定安排**，不是故障。
+     所以页面要把「已截止 / 还没开更」和「真出问题了」区分开，
+     前者用中性的蓝色说明，后者才保留原来的黄/红告警。
+
+     ⚠️ 数据里的 fetchedAt 是北京时间字符串；访客不一定在东八区，
+     所以统一换算成「北京时间口径」再比，避免海外访客看到的时刻差 8 小时。 */
+  var OPEN_H = 9,  CLOSE_H = 16;
+  /* 访客所在时区相对 UTC 的偏移（getTimezoneOffset 给的是 UTC-本地，取反才对）。
+     想要的量：一个「按本地 getters 读出来就是北京时间」的 Date。
+     推导：local(X) = X + off，要让它等于 utc(t) + 8h，即 X = t + 8h - off。 */
+  var TZFIX = -(new Date().getTimezoneOffset()) * 60000;
+  function bjNowMs(){ return Date.now() + 8*3600*1000 - TZFIX; }
+  function bjNow(){ return new Date(bjNowMs()); }
+  function dayKey(d){ return d.getFullYear() + "-" + (d.getMonth()+1) + "-" + d.getDate(); }
+  function hhmm(d){
+    return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+  }
+  /* live = 正常更新中；closed = 今天已截止；waiting = 还没到今天的更新时间；
+     stale = 服务时段内却明显偏旧（真的出问题了） */
+  function serviceState(view){
+    var ts = parseTs(view && view.fetchedAt);
+    if(!ts) return "live";
+    var now = bjNow();
+    var mins = now.getHours()*60 + now.getMinutes();
+    if(mins >= OPEN_H*60 && mins < CLOSE_H*60) return "live";
+    if(dayKey(new Date(ts)) === dayKey(now)){
+      // 数据就是今天这次更新抓的 → 已过 16:00 停更，正常
+      return mins >= CLOSE_H*60 ? "closed" : "live";
+    }
+    // 数据不是今天的：9:00 之前属于「还没开更」，其余情况是真的偏旧了
+    return mins < OPEN_H*60 ? "waiting" : "stale";
+  }
+
   function freshness(view){
     var ts = parseTs(view && view.fetchedAt);
     if(!ts) return {ts:0, age:0, text:"", level:""};
-    var age = Date.now() - ts;
+    var age = bjNowMs() - ts;
     return {ts:ts, age:age, text:ageText(age),
             level: age > STALE_BAD ? "bad" : (age > STALE_WARN ? "warn" : "")};
   }
@@ -705,10 +745,18 @@ table.datatable{
       : '<div class="empty">没有匹配的比赛，换个关键词试试。</div>';
 
     renderPager(rows.length, pages, view.label);
-    var fr = freshness(view), extra = "";
+    var fr = freshness(view), sv = serviceState(view), extra = "";
     if(fr.text){
-      extra = ' · <span class="age ' + fr.level + '" title="抓取时间 ' + esc(view.fetchedAt) + '">' +
-              esc((fr.level === "bad" ? "数据已过期 · " : "") + fr.text) + "</span>";
+      var lvl = fr.level, txt = fr.text;
+      if(sv === "closed"){                       // 今天已停更：这就是最后一份，别写成「过期」
+        lvl = "info";
+        txt = "今日已截止 · " + String(view.fetchedAt).slice(11, 16);
+      }else if(sv === "waiting"){                // 还没到今天的更新时间
+        lvl = "info";
+        txt = "9:00 起更新 · " + fr.text;
+      }
+      extra = ' · <span class="age ' + lvl + '" title="抓取时间 ' + esc(view.fetchedAt) + '">' +
+              esc((lvl === "bad" ? "数据已过期 · " : "") + txt) + "</span>";
     }
     document.getElementById("stats").innerHTML = view.statsHtml + extra;
   }
@@ -856,14 +904,32 @@ table.datatable{
     refreshSourceOptions();
   }
 
-  /* ---------- 数据过期提示 ----------
-     当前源的数据明显过期时，把「抓的是什么时候的、更新的在哪一份」讲清楚，
-     并给一个直接切过去的按钮。 */
+  /* ---------- 数据新鲜度提示 ----------
+     两种完全不同的情形要分开说：
+       · closed / waiting：每天 9:00-16:00 之外不更新是既定安排，
+         页面反而要明确告诉访客「这就是今天最后一份」—— 平和处理，别报警。
+       · stale / 过期：仍是服务时段（或压根不该停）却明显偏旧，那才是真出问题了。 */
   function paintStale(){
     var bar = document.getElementById("stalebar");
     if(!bar) return;
     var view = currentView();
     var fr = freshness(view);
+    var sv = serviceState(view);
+    var at = (view && view.fetchedAt) ? String(view.fetchedAt).slice(11, 16) : "";
+
+    if(sv === "closed" || sv === "waiting"){
+      var head = sv === "closed" ? "今日数据已截止" : "今日尚未开始更新";
+      var body = sv === "closed"
+        ? "每日更新时段 9:00-16:00，当前展示的是今天 " + at + " 的最后一次更新" +
+          "（" + (fr.text || "刚刚") + "），明早 9:00 恢复。"
+        : "每日更新时段 9:00-16:00，当前展示的是 " +
+          ((view && String(view.fetchedAt).slice(0, 16)) || "上一次") + " 的数据，9:00 起恢复更新。";
+      bar.className = "stalebar info";
+      bar.innerHTML = "<b>" + head + "</b><span>" + esc(body) + "</span>";
+      bar.style.display = "";
+      return;
+    }
+
     if(!fr.level){                                  // 当前源足够新，不打扰
       bar.style.display = "none";
       return;
