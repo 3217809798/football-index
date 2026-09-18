@@ -329,6 +329,17 @@ table.datatable{
 .pageintro h1{margin:0 0 10px;font-size:19px;line-height:1.4;color:var(--ink)}
 .pageintro h2{margin:18px 0 8px;font-size:14px;color:var(--ink)}
 .pageintro p{margin:0 0 10px}
+/* 历史归档内链：由 publish.py 在打包时注入到下面的 ARCHIVE_LINKS 锚点里（最近 30 天）。
+   它是访客可见的导航，也是爬虫发现 /football/<日期>/ 归档页的主入口。 */
+.pageintro .archlead{margin:0 0 8px}
+.pageintro ul.archlist{list-style:none;margin:0 0 8px;padding:0;display:flex;flex-wrap:wrap;gap:6px}
+.pageintro ul.archlist li{margin:0}
+.pageintro ul.archlist a{
+  display:block;padding:2px 9px;border:1px solid #e3e6eb;border-radius:12px;background:#fafbfc;
+  color:#216d01;text-decoration:none;font-size:12.5px;transition:.15s
+}
+.pageintro ul.archlist a:hover{border-color:var(--brand);color:var(--brand-d)}
+.pageintro .archmore{margin:0;color:#8b95a1}
 .seoblk{margin:0 12px}
 .seoblk h2{margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid #e6e9ee;
   font-size:15px;color:var(--ink)}
@@ -423,6 +434,12 @@ table.datatable{
     <h2>表格字段说明</h2>
     <p>「买家挂牌」与「卖家挂牌」为交易所买方、卖方的挂单量；「价位」为当前成交价位；「成交量」为已成交金额；「比例」为该赛果成交量占全场成交的比重；「必指」为必发指数，即成交量归一后的强度值；「赔指」为价位归一后的指数；「赔付率」为该赛果当前的赔付比率；「欧初」「欧终」为多家主流机构平均欧指的初盘与终盘；「凯指」「凯差」为凯利指数与凯利方差，衡量欧指相对真实概率的偏离程度；「热指」为热度指数。</p>
     <p>全部场次按编号顺序列出，也可以用页面顶部工具条按球队名称搜索、按开赛时间或总成交额排序。</p>
+    <!-- 历史归档内链：打包时由 publish.py 调 archive.links_html() 填进来（最近 30 天）。
+         这块**不会**被 dropSeoBody 移除，所以访客也看得到 —— 它同时是搜索引擎发现
+         /football/<日期>/ 那些按天归档页的主入口。
+         ⚠️ 两个注释标记是 archive.py 的 LINKS_START / LINKS_END，改名必须两边同步改。 -->
+    <!--ARCHIVE_LINKS_START-->
+    <!--ARCHIVE_LINKS_END-->
   </section>
 
 </div>
