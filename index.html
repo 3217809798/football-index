@@ -89,15 +89,17 @@ a:hover{color:#c60}
   font:13px/1.4 inherit;padding:3px 6px;border:1px solid #d5d9e0;border-radius:4px;
   background:#fff;color:#455569;cursor:pointer
 }
-/* 交易播报跑马灯 */
-.ticker{flex:1 1 auto;min-width:0;overflow:hidden;position:relative;height:24px;color:#455569;font-size:12px}
-.ticker::after{content:"";position:absolute;top:0;right:0;width:40px;height:100%;
-  background:linear-gradient(90deg,rgba(250,250,250,0),#fafafa)}
-.ticker-track{position:absolute;white-space:nowrap;will-change:transform;animation:tick 60s linear infinite}
-.ticker:hover .ticker-track{animation-play-state:paused}
-@keyframes tick{from{transform:translateX(0)}to{transform:translateX(-50%)}}
-.ticker b{color:#3300ff}
-.ticker u{color:var(--up);text-decoration:none;font-weight:700}
+/* 「历史归档」入口：紧跟数据来源下拉框右侧（就是原先跑马灯占的位置）。
+   nbar 不吸顶，但它在首屏顶部常驻可见、且不依赖脚本，所以访客一眼就能看到、
+   爬虫也读得到 —— 它是从主页发现 /football/<日期>/ 各归档页的内链起点。 */
+.archbtn{
+  display:inline-flex;align-items:center;flex:0 0 auto;
+  font:12px/1.4 inherit;font-weight:700;padding:4px 10px;
+  border:1px solid #f0c88a;border-radius:4px;background:#fffaf1;
+  color:var(--brand-d);text-decoration:none;white-space:nowrap;transition:.15s
+}
+.archbtn:hover{border-color:var(--brand);background:#fff3dd}
+.archbtn::before{content:"\1F4C5";margin-right:5px;font-weight:400}
 .logo{display:flex;align-items:center;gap:8px;flex:0 0 auto}
 .logo-mark{width:26px;height:26px;border-radius:7px;background:linear-gradient(145deg,#ffb340,#f28100);
   display:grid;place-items:center;color:#fff;font-size:15px;box-shadow:0 1px 3px rgba(242,129,0,.5)}
@@ -122,13 +124,6 @@ a:hover{color:#c60}
   background:#fff;color:var(--ink-2);cursor:pointer
 }
 .btn:hover{border-color:var(--brand);color:var(--brand-d)}
-/* 归档入口按钮：.btn 原本只给 <button> 用，这里是 <a>，要自己补上盒模型与去下划线 */
-a.btn{display:inline-block;text-decoration:none;line-height:1.4;white-space:nowrap}
-/* 「历史归档」入口：工具条是 sticky 的，滚到任何位置都点得到 —— 它是访客浏览往期数据
-   的主入口，也是爬虫从主页发现 /football/<日期>/ 各归档页的内链起点。 */
-.btn.arch{color:var(--brand-d);border-color:#f0c88a;background:#fffaf1;font-weight:700}
-.btn.arch:hover{border-color:var(--brand);background:#fff3dd;color:var(--brand-d)}
-.btn.arch::before{content:"\1F4C5";margin-right:5px;font-weight:400}
 .stats{margin-left:auto;font-size:12px;color:#8a939e;white-space:nowrap}
 .stats em{font-style:normal;color:var(--brand-d);font-weight:700}
 /* 数据新鲜度标记：抓取时间距今多久 */
@@ -250,7 +245,8 @@ table.datatable{
 
 /* ============ 实时状态（本地服务下的自动刷新） ============ */
 .live{
-  display:flex;align-items:center;gap:7px;flex:0 0 auto;
+  /* 跑马灯（原本 flex:1 撑开）删掉后，靠 auto 外边距把状态与 logo 推到最右 */
+  margin-left:auto;display:flex;align-items:center;gap:7px;flex:0 0 auto;
   font-size:12px;color:#6b7280;white-space:nowrap
 }
 .live .dot{
@@ -309,9 +305,10 @@ table.datatable{
 }
 @media (max-width:640px){
   .nbar{flex-wrap:wrap;height:auto;padding:8px 10px;gap:8px}
-  .ticker{order:3;flex-basis:100%}
-  .stats{margin-left:0;flex-basis:100%}
-  .live{margin-left:auto}
+  .archbtn{padding:4px 8px;font-size:11.5px}
+  /* 统计条独占一行，并且必须允许换行：它原本是 nowrap，小屏下会撑到 528px，
+     让整个页面可以横向拖动（访客得左右滑才能看完，很容易误以为页面坏了）。 */
+  .stats{margin-left:0;flex-basis:100%;white-space:normal}
 }
 
 /* ============ 竞彩必发数据专用 ============ */
@@ -392,7 +389,10 @@ table.datatable{
       <label for="source">数据来源：</label>
       <select id="source"></select>
     </div>
-    <div class="ticker" id="ticker"><div class="ticker-track" id="tickerTrack"></div></div>
+    <!-- 历史归档入口（常驻）：指向归档索引页，访客可查阅往期每日数据。
+         这个 URL 是 archive.py 的 ARCHIVE_URL，索引页在第一次成功抓取时就生成且不会删除，
+         所以这里写死是安全的；改 slug 必须同步改 archive.py 的 ARCHIVE_SLUG。 -->
+    <a class="archbtn" href="https://90qu.com/football/archive/" title="查阅往期每日竞彩必发指数数据">历史归档</a>
     <div class="live" id="live" title="自动刷新状态">
       <span class="dot"></span>
       <span class="ltxt" id="liveText">检查服务中…</span>
@@ -414,10 +414,6 @@ table.datatable{
       <option value="hpct">按主胜比例 ↓</option>
     </select>
     <button class="btn" id="toggleAll" type="button">全部折叠</button>
-    <!-- 历史归档入口（常驻）：指向归档索引页，访客可查阅往期每日数据。
-         这个 URL 是 archive.py 的 ARCHIVE_URL，索引页在第一次成功抓取时就生成且不会删除，
-         所以这里写死是安全的；改 slug 必须同步改 archive.py 的 ARCHIVE_SLUG。 -->
-    <a class="btn arch" href="https://90qu.com/football/archive/" title="查阅往期每日竞彩必发指数数据">历史归档</a>
     <div class="stats" id="stats"></div>
     <!-- 数据过期提示条（仅在当前源明显过期时出现，见 paintStale） -->
     <div class="stalebar" id="stalebar" style="display:none"></div>
@@ -611,8 +607,6 @@ table.datatable{
     return (it.title + " " + it.home + " " + it.away + " " + it.kickoff + " " +
             extra.join(" ")).toLowerCase();
   }
-  const topN = (arr, n, key) => arr.sort((a,b) => num(b[key]) - num(a[key])).slice(0, n);
-
   /* ================= 适配器 ================= */
   var ADAPTERS = {
 
@@ -670,34 +664,12 @@ table.datatable{
           };
         });
 
-        // 播报：用「成交量」列（COLUMNS 里的下标 3）
-        var VOLC = (d.columns || []).indexOf("成交量");
-        var PRICEC = (d.columns || []).indexOf("价位");
-        var tops = [];
-        (d.matches || []).forEach(function(m){
-          (m.rows || []).forEach(function(r){
-            var v = r.v || [];
-            if(!v[VOLC]) return;
-            tops.push({
-              match: m.home + " VS " + m.away,
-              side: r.item === "主" ? "主胜" : (r.item === "客" ? "客胜" : "和局"),
-              vol: v[VOLC], price: v[PRICEC], time: d.fetchedAt
-            });
-          });
-        });
-        var bits = topN(tops, 6, "vol").map(function(t){
-          return "<b>比赛</b>:" + esc(t.match) + " 市场:竞彩必发 " + esc(t.side) +
-                 ":<u>" + esc(t.vol) + "</u> 价位:" + esc(t.price) + " 时间:" + esc(t.time);
-        });
-
         var totalVol = (d.matches || []).reduce(function(s,m){ return s + num(m.total); }, 0);
         return {
           label: "竞彩必发",
           docTitle: "竞彩必发 · 足球指数中心",
           dataDate: String(d.fetchedAt || "").slice(0, 10),
           items: items,
-          tickerPrefix: "竞彩必发成交量 Top6",
-          tickerBits: bits,
           fetchedAt: d.fetchedAt || "",
           statsHtml: "共 <em>" + items.length + "</em> 场 · 总成交量 <em>" +
                      fmt(totalVol) + "</em> · 数据更新 " + esc(d.fetchedAt || "-")
@@ -719,19 +691,6 @@ table.datatable{
     sel.innerHTML = SRC_KEYS.map(function(k){
       return '<option value="' + esc(k) + '">' + esc(ADAPTERS[k].name) + "</option>";
     }).join("");
-  }
-
-  /* ---------- 渲染：交易播报 ---------- */
-  function renderTicker(view){
-    var tk = document.getElementById("ticker");
-    if(!view || !view.tickerBits || !view.tickerBits.length){
-      tk.style.display = "none";
-      return;
-    }
-    tk.style.display = "";
-    var head = '<span style="color:#3300ff"><strong>竞彩指数快报</strong></span> --- ' +
-               view.tickerPrefix + "：" + view.tickerBits.join(" --- ") + " --- ";
-    document.getElementById("tickerTrack").innerHTML = head + head;   // 复制一份实现无缝循环
   }
 
   /* ---------- 渲染：单场比赛 ---------- */
@@ -980,7 +939,6 @@ table.datatable{
     var view = state.cache[state.src];
     if(view){
       document.title = view.docTitle;
-      renderTicker(view);
     }
     paintStale();
     refreshSourceOptions();
