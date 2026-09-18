@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>足球指数中心 · 竞彩必发指数数据</title>
 <meta name="description" content="竞彩足球必发指数数据页面：逐场展示每场比赛的交易量、比例、赔付、价位、挂牌指数、欧洲平均、凯利方差与大小球指数等数据。" />
+<!-- 自指 canonical：这个目录只有这一个 URL，声明出来避免被当成重复页 -->
+<link rel="canonical" href="https://90qu.com/football/" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%BD%3C/text%3E%3C/svg%3E" />
 <meta property="og:type" content="website" />
 <meta property="og:title" content="足球指数中心 · 竞彩必发指数数据" />
@@ -317,6 +319,27 @@ table.datatable{
   padding-left:10px;height:24px
 }
 .datatable tbody tr.ou-sep:hover td{background:#fff7ea}
+
+/* ============ 静态副本 + 页面说明（给搜索引擎看的正文） ============
+   #seoBody 是打包时由 publish.py 注入的全量表格副本：脚本渲染出列表后整块移除，
+   所以访客看不到它；而爬虫不执行 JS，读到的就是它 —— 这块是收录的关键。
+   .pageintro 是常驻说明，两种状态下都在源码里，样式刻意做得克制。 */
+.pageintro{margin:6px 12px 28px;padding-top:16px;border-top:1px solid #e6e9ee;
+  color:#5b6673;font-size:12.5px;line-height:1.9}
+.pageintro h1{margin:0 0 10px;font-size:19px;line-height:1.4;color:var(--ink)}
+.pageintro h2{margin:18px 0 8px;font-size:14px;color:var(--ink)}
+.pageintro p{margin:0 0 10px}
+.seoblk{margin:0 12px}
+.seoblk h2{margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid #e6e9ee;
+  font-size:15px;color:var(--ink)}
+.seoblk .seo-lead{margin:0 0 14px;color:#5b6673;font-size:12.5px;line-height:1.8}
+.seoblk .seo-match{margin:0 0 16px}
+.seoblk .seo-match h3{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  margin:0;height:30px;padding:0 10px;background:var(--brand);color:#fff;
+  font-size:13px;font-weight:700
+}
+.seoblk .seo-match h3 .t{margin-left:auto;font-size:12px;font-weight:400;color:var(--cream-l)}
 </style>
 </head>
 <body>
@@ -381,8 +404,26 @@ table.datatable{
   <!-- 比赛列表 -->
   <div id="list"></div>
 
+  <!-- 静态数据副本：publish.py 打包时会把当天全部场次渲染成真实的 <table> 写在这两个
+       注释之间。它存在的唯一理由是——搜索引擎的抓取程序不执行 JS，只能读到静态 HTML；
+       没有这块，它们看到的就只有一个空壳子（实测剥掉 script 后整页只剩 100 来字）。
+       页面脚本渲染出列表后会整块移除，所以访客永远看不到两份数据。
+       ⚠️ 两个注释标记是 publish.py 的替换锚点，改名必须同步改 publish.py 的 STATIC_START/STATIC_END。 -->
+  <!--SEO_BODY_START-->
+  <!--SEO_BODY_END-->
+
   <!-- 分页 -->
   <div class="pager" id="pager"></div>
+
+  <!-- 页面说明：固定的正文，不随数据变化、不参与脚本渲染，始终留在源码里 -->
+  <section class="pageintro">
+    <h1>竞彩必发指数数据</h1>
+    <p>本页汇总今日竞彩足球赛事的必发（交易所）指数数据，按比赛逐场展示主胜、平局、客胜三个赛果的挂牌量、成交量、成交比例与赔付率等盘口指标，并附欧洲平均赔率的初盘与终盘、凯利指数、凯利方差与热度指数，可用于对比市场资金的真实流向与赔率变化。</p>
+    <p>数据在每日服务时段内自动更新，页面顶部会标出当前这份数据的抓取时间；当天更新时段结束后，页面展示的是当日最后一次有效更新的截止数据。</p>
+    <h2>表格字段说明</h2>
+    <p>「买家挂牌」与「卖家挂牌」为交易所买方、卖方的挂单量；「价位」为当前成交价位；「成交量」为已成交金额；「比例」为该赛果成交量占全场成交的比重；「必指」为必发指数，即成交量归一后的强度值；「赔指」为价位归一后的赔率指数；「赔付率」为该赛果当前的赔付比率；「欧初」「欧终」为多家欧洲博彩公司平均赔率的初盘与终盘；「凯指」「凯差」为凯利指数与凯利方差，衡量赔率相对真实概率的偏离程度；「热指」为热度指数。</p>
+    <p>全部场次按编号顺序列出，也可以用页面顶部工具条按球队名称搜索、按开赛时间或总成交额排序。</p>
+  </section>
 
 </div>
 
@@ -705,6 +746,18 @@ table.datatable{
     el.innerHTML = html;
   }
 
+  /* ---------- 移除静态数据副本 ----------
+     打包时注入的 #seoBody 是给搜索引擎看的全量表格（爬虫不执行 JS，只能读静态 HTML）。
+     脚本一旦把列表渲染出来它就成了重复内容，必须整块撤掉，否则访客会先看到一屏静态
+     表格、往下才是正常的交互列表。渲染失败时不移除 —— 那时它反而是唯一的正文。 */
+  var seoDropped = false;
+  function dropSeoBody(){
+    if(seoDropped) return;
+    seoDropped = true;
+    var el = document.getElementById("seoBody");
+    if(el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
   /* ---------- 主渲染 ---------- */
   function currentView(){ return state.cache[state.src]; }
 
@@ -745,6 +798,7 @@ table.datatable{
       : '<div class="empty">没有匹配的比赛，换个关键词试试。</div>';
 
     renderPager(rows.length, pages, view.label);
+    dropSeoBody();                             // 列表已经画出来了，撤掉给爬虫看的那份副本
     var fr = freshness(view), sv = serviceState(view), extra = "";
     if(fr.text){
       var lvl = fr.level, txt = fr.text;
