@@ -11,6 +11,7 @@ bifaw_profile/
 
 # ---- 运行时产物，CI 每次都会重新生成 ----
 .publish-fingerprint
+.publish-state
 .publish.lock
 logs/
 dist/
