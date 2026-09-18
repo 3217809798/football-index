@@ -13,6 +13,7 @@ publish.py —— 把竞彩指数页面发布到静态虚拟主机（如 90qu.co
     python publish.py --upload          # 抓取 + 生成 + 上传（首次部署用全量）
     python publish.py --upload --only-data   # 日常更新用：只传数据文件
     python publish.py --no-fetch --upload    # 不抓取，用现有数据重新发布
+    python publish.py --upload --page-only   # 只发页面文件，绝不碰数据（改版式立即上线用）
     python publish.py --skip-bifaw      # 只跑超级指数（需配合 --with-spdex）
     python publish.py --with-spdex      # 临时恢复超级指数抓取
     python publish.py 20260913          # 指定期号（只对超级指数有意义）
@@ -1006,7 +1007,7 @@ def run(args):
     fp = fingerprint(*data_files)
     # 记下「本轮有没有抓到可上线的新数据」，供 CI 决定要不要回写仓库快照。
     # --no-fetch 时磁盘上的数据不是本轮抓的，不算新数据（否则会把旧快照又提交一遍）。
-    write_state(data_ok and not args.no_fetch, bifaw_why)
+    write_state(data_ok and not args.no_fetch and not args.page_only, bifaw_why)
 
     if data_ok and args.only_data and not args.force and fp and fp == read_fp():
         log("数据与上次上传一致，跳过上传（要强制上传加 --force）")
@@ -1017,7 +1018,10 @@ def run(args):
     if not args.only_data:
         files.append((os.path.join(DIST, "index.html"), "index.html"))
         files.append((os.path.join(DIST, ".htaccess"), ".htaccess"))
-    if data_ok:
+    if args.page_only:
+        # 只发页面：数据文件一律不碰（本地磁盘上的数据不一定是当天的，传上去就可能倒退）
+        log("--page-only：只传页面文件，数据文件保持线上不变")
+    elif data_ok:
         if not args.only_data:
             snaps = ["bf-inline.js"] + (["data-inline.js"] if use_spdex else [])
             for snap in snaps:
@@ -1072,6 +1076,10 @@ def main():
     ap.add_argument("--with-spdex", action="store_true",
                     help="临时恢复超级指数（c.spdex.com）抓取（该站已改版为会员站，默认关闭）")
     ap.add_argument("--force", action="store_true", help="数据没变化也强制上传")
+    ap.add_argument("--page-only", action="store_true",
+                    help="只上传页面文件（index.html/.htaccess），绝不动数据文件。"
+                         "改了版式想立刻生效、又不在服务时段时用 —— 页面文件不含数据，"
+                         "随时传都安全；数据文件则必须等窗口内抓到新数据才允许传")
     ap.add_argument("--ignore-window", action="store_true",
                     help="忽略 9:00-16:00 服务时段限制（想手动补一次时用，注意此时通常抓不到）")
     ap.add_argument("--check", action="store_true",
