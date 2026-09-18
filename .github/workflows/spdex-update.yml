@@ -186,6 +186,11 @@ jobs:
           # CI 每次全新 checkout，不提交的话下一轮会当成「今天还没推」而重复推送，白烧配额。
           # 它只记录 URL + 北京日期，不含任何凭据。
           if [ -f .baidu-push-state ]; then git add .baidu-push-state; fi
+          # 归档清单（第三档）：记录了「历史上有哪些天被归档了」。
+          # CI 全新 checkout，不落仓库的话下一轮就不知道昨天/前天的归档页存在，
+          # /football/archive/ 索引页与 sitemap 会把它漏掉（只剩今天一天）。
+          # 里面只有日期 + 场次数 + 联赛名，同样不含凭据。
+          if [ -f .archive-index.json ]; then git add .archive-index.json; fi
           if git diff --cached --quiet; then
             echo "仓库里的快照与本轮数据一致，无需提交"
             exit 0
