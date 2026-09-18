@@ -17,6 +17,7 @@ bifaw_profile/
 .publish.lock
 logs/
 dist/
+seo/
 publish.log
 *.bak
 __pycache__/
@@ -34,6 +35,8 @@ ref/
 # bf-inline.js    file:// 打开时的内联兜底
 # bifaw_fetch.py     抓竞彩必发（登录 + 验证码 OCR）
 # publish.py         抓取+生成+上传
+# archive.py         按天归档页 /football/<日期>/ 与 sitemap 清单（第三档 SEO）
+# .archive-index.json  归档清单（CI 生成并回写，只有日期+场次数+联赛名，无凭据）
 # build_publish_conf.py   CI 里由 Secrets 生成 publish.json
 # .github/workflows/spdex-update.yml   主定时任务
 # .github/workflows/keepalive.yml      保活任务（可选）
