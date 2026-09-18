@@ -1,5 +1,5 @@
 # 竞彩指数页面自动更新
-#   每 20 分钟：抓 bifaw（竞彩必发）→ 生成 dist/ → FTP 覆盖到 90qu.com 子目录
+#   每 20 分钟（仅北京 9:00-16:00）：抓 bifaw（竞彩必发）→ 生成 dist/ → FTP 覆盖到 90qu.com 子目录
 #   凭据全部来自仓库 Secrets；本地带密码的 publish.json / bifaw_conf.json 被 .gitignore 挡住，不进仓库
 #
 #   注：超级指数（c.spdex.com）已于 2026-09-16 下线（源站改成会员登录站），
@@ -7,6 +7,17 @@
 #
 # ⚠️ 竞彩必发（bifaw.com）网页会识别无头浏览器，识别到就只回「undefined，请点击此处重新获取!」，
 #    因此必须跑「有界面」的 Chrome —— CI 上用 xvfb 提供虚拟显示（xvfb-run），效果等同于有界面。
+#
+# ⚠️ 数据源只在「北京时间 9:00-16:00」提供服务（免费账号），16:00 之后抓必然是 0 场。
+#    所以本工作流是「两层闸门」：
+#      第一层 · 时段预检（下面的「服务时段预检」步骤，2026-09-18 加）：
+#              cron 之外再算一次北京时间，窗口外就把后面的重步骤（拉仓库、装 Python、
+#              装 playwright/ddddocr、抓取、上传、回写）全部 if 掉 —— 整轮只花几秒，
+#              不白装依赖。cron 在 UTC 侧没法精确表达「北京 9-16」，且 GitHub 定时会延迟，
+#              这一层专门兜住那些跑到窗口外的轮次。
+#      第二层 · 权威闸门（publish.py 的 SERVICE_OPEN/SERVICE_CLOSE + service_state()）：
+#              真正说了算的一层。预检只有分钟级精度，万一某轮踩着 16:00 进来，
+#              脚本会自己 RESULT: SKIP 退出，一个文件都不传。
 #
 # 想改成只在数据变化时上传，把下面 run 里的 --upload 换成 --upload --only-data 即可。
 name: spdex-update
@@ -18,10 +29,7 @@ on:
     #   这里取小时 1-7（不含 8）每 20 分钟一次，再加一条 07:50（北京 15:50）
     #   尽量贴近 16:00 截止线再抓一次，让当天「截止数据」尽量新。
     #
-    # ⚠️ 权威判定在 publish.py 里（SERVICE_OPEN/SERVICE_CLOSE）：
-    #    GitHub 的定时是「尽力而为」、常延迟几分钟，万一某次跑到 16:00 之后，
-    #    脚本会自己 RESULT: SKIP 退出，一个文件都不传。
-    #    cron 收缩到这里纯粹是为了别让 Runner 半夜白跑一小时。
+    # ⚠️ GitHub 改 cron 之后旧排程可能还会多跑一阵，那批轮次全部由「时段预检」几秒挡掉。
     - cron: "*/20 1-7 * * *"
     - cron: "50 7 * * *"
   # 允许在 Actions 页面点一下就跑，用来临时补一次 / 验证配置
@@ -43,15 +51,40 @@ jobs:
     timeout-minutes: 15
 
     steps:
+      # ---- 第一层闸门：时段预检 ---------------------------------------------
+      # 放在所有步骤最前面：不需要 checkout、不需要装任何东西，窗口外整个 job 几秒结束。
+      # 边界刻意与 publish.py 的 SERVICE_OPEN=(9,0) / SERVICE_CLOSE=(16,0) 保持一致；
+      # 用 env 里的 TZ 让 date 直接给北京时间，不看 Runner 的本地时区。
+      - name: 服务时段预检
+        id: window
+        env:
+          TZ: Asia/Shanghai
+        run: |
+          now=$(date '+%F %H:%M')
+          # 10# 前缀：%H%M 会带前导零（如 0920），避免被当成八进制
+          hm=$((10#$(date '+%H%M')))
+          if [ "$hm" -ge 900 ] && [ "$hm" -lt 1600 ]; then
+            in_window=true
+            echo "现在 $now（北京），在服务时段内 → 继续抓取。"
+          else
+            in_window=false
+            echo "现在 $now（北京），在服务时段外（9:00-16:00 之外）→ 本轮跳过：不装依赖、不抓取、不上传。"
+          fi
+          echo "in_window=$in_window" >> "$GITHUB_OUTPUT"
+          echo "bj_now=$now" >> "$GITHUB_OUTPUT"
+
       - name: 拉取仓库
+        if: steps.window.outputs.in_window == 'true'
         uses: actions/checkout@v4
 
       - name: 准备 Python
+        if: steps.window.outputs.in_window == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: 安装抓取依赖
+        if: steps.window.outputs.in_window == 'true'
         run: |
           set -e
           sudo apt-get update -qq
@@ -66,6 +99,7 @@ jobs:
 
       # publish.py 需要根目录有 publish.json；这份是现场生成的，不来自仓库
       - name: 由 Secrets 生成 publish.json
+        if: steps.window.outputs.in_window == 'true'
         env:
           FTP_MODE: ${{ secrets.FTP_MODE }}
           FTP_HOST: ${{ secrets.FTP_HOST }}
@@ -79,6 +113,7 @@ jobs:
       # 不用 set -e：要自己拿到退出码再决定成败，避免脚本一失败日志就断在这里
       - name: 抓取并上传
         id: publish
+        if: steps.window.outputs.in_window == 'true'
         env:
           TZ: Asia/Shanghai
           BIFAW_USER: ${{ secrets.BIFAW_USER }}
@@ -104,7 +139,7 @@ jobs:
         run: |
           set -e
           if [ ! -f .publish-state ]; then
-            echo "没有 .publish-state（本轮没跑到写状态那一步）→ 跳过回写"
+            echo "没有 .publish-state（本轮没跑到写状态那一步 / 时段外整体跳过）→ 跳过回写"
             exit 0
           fi
           echo "--- .publish-state ---"
@@ -131,29 +166,39 @@ jobs:
         env:
           TZ: Asia/Shanghai
           RC: ${{ steps.publish.outputs.rc }}
+          IN_WINDOW: ${{ steps.window.outputs.in_window }}
+          BJ_NOW: ${{ steps.window.outputs.bj_now }}
         run: |
-          RESULT=$(grep -E '^RESULT: (OK|WARN|FAIL|SKIP)' publish.log | tail -1 || true)
-          [ -n "$RESULT" ] || RESULT="RESULT: UNKNOWN - 日志里没有结果行"
+          if [ "$IN_WINDOW" != "true" ]; then
+            RESULT="RESULT: SKIP - 服务时段外（北京 9:00-16:00 之外），本轮整体跳过"
+            RC="skipped"
+            TAIL="（本轮没跑抓取，没有日志）"
+          else
+            RESULT=$(grep -E '^RESULT: (OK|WARN|FAIL|SKIP)' publish.log | tail -1 || true)
+            [ -n "$RESULT" ] || RESULT="RESULT: UNKNOWN - 日志里没有结果行"
+            TAIL=$(tail -40 publish.log || true)
+          fi
           {
             echo "### 竞彩指数自动更新"
             echo ""
             echo "| 项目 | 值 |"
             echo "| --- | --- |"
             echo "| 运行时间 | $(date '+%Y-%m-%d %H:%M:%S %Z') |"
+            echo "| 北京预检 | ${BJ_NOW:-未知} |"
             echo "| 结束代码 | \`${RC:-未知}\` |"
             echo "| 结果 | \`$RESULT\` |"
             echo ""
             echo "<details><summary>日志末尾 40 行</summary>"
             echo ""
             echo '```'
-            tail -40 publish.log
+            echo "$TAIL"
             echo '```'
             echo ""
             echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 失败时留一份日志
-        if: always() && steps.publish.outputs.rc != '0'
+        if: always() && steps.window.outputs.in_window == 'true' && steps.publish.outputs.rc != '0'
         uses: actions/upload-artifact@v4
         with:
           name: publish-log-${{ github.run_number }}
@@ -166,11 +211,17 @@ jobs:
       #   0 = 成功
       #   2 = 数据不完整（竞彩必发没抓到，已保留旧数据，下一轮自动重试）
       #   1 = 配置缺失 / 上传失败 —— 这个才值得把人叫醒
+      #   时段外整体跳过时 rc 是空的，必须单独放行，否则会被当成「配置缺失」把 job 判红
       - name: 判断是否真的失败
         if: always()
         env:
           RC: ${{ steps.publish.outputs.rc }}
+          IN_WINDOW: ${{ steps.window.outputs.in_window }}
         run: |
+          if [ "$IN_WINDOW" != "true" ]; then
+            echo "服务时段外，本轮整体跳过（正常行为，不是失败）"
+            exit 0
+          fi
           case "${RC:-1}" in
             0)
               echo "发布成功"
