@@ -88,11 +88,26 @@ def build_url(site, token):
 
 
 def default_urls():
-    """复用 sitemap 的 URL 清单 —— 一处维护，两边一致。"""
+    """要推的 URL 清单，**按优先级排序**（顺序就是优先级）。
+
+    百度新站配额只有约 10 条/天，而 --max 会截断，所以顺序很有讲究：
+      1) 今天那天的归档页（/football/<今天>/）—— 每天都是一个全新 URL、全新内容，
+         是「主动推送」最该花配额的地方；
+      2) 主页 /football/ 与 /jc/ —— 内容天天变、URL 不变，推了能让百度尽快重抓；
+      3) 其余历史归档页（日期倒序）—— 正常情况下它们各自「当天」就推过了，
+         --daily 的台账会把它们滤掉；排在这里只是兜底（比如某天几轮推送全失败）。
+
+    ⚠️ 清单统一来自 archive.sitemap_entries()，和 sitemap 同源，别在这里另抄一份。
+    """
     try:
         sys.path.insert(0, ROOT)
-        import build_seo_files
-        return [u for u, _p, _n in build_seo_files.pages()]
+        import archive
+        urls = [u for u, _p, _f, _m in archive.sitemap_entries()]
+        today_url = archive.archive_url(archive.bj_today())
+        if today_url in urls:
+            urls.remove(today_url)
+            urls.insert(0, today_url)
+        return urls
     except Exception as e:
         print("!! 取 sitemap URL 清单失败(%s)，退回默认两条" % e)
         return ["https://90qu.com/football/", "https://90qu.com/jc/"]
