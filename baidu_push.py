@@ -169,11 +169,18 @@ def push(urls, dry=False):
 
 
 def quota():
+    """配额查询：百度文档说 GET 同一个地址能拿到 remain，但**实测本账号始终 400**。
+    所以这个子命令只是「试着问一下」，失败不算故障；真实配额看推送返回里的 remain。
+    """
     site, token = load_conf()
     api = build_url(site, token)
     try:
         st, txt = http(api, "GET")
     except urllib.error.HTTPError as e:
+        if e.code == 400:
+            print("配额查询返回 400 —— 百度这个 GET 接口对本账号不开放（实测始终如此，与本脚本无关）。")
+            print("真实剩余配额看**推送返回里的 remain**：每次推送成功时脚本都会打印。")
+            return 0
         print("!! HTTP %s %s" % (e.code, e.reason))
         return 1
     except Exception as e:
