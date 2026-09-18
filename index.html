@@ -122,6 +122,13 @@ a:hover{color:#c60}
   background:#fff;color:var(--ink-2);cursor:pointer
 }
 .btn:hover{border-color:var(--brand);color:var(--brand-d)}
+/* 归档入口按钮：.btn 原本只给 <button> 用，这里是 <a>，要自己补上盒模型与去下划线 */
+a.btn{display:inline-block;text-decoration:none;line-height:1.4;white-space:nowrap}
+/* 「历史归档」入口：工具条是 sticky 的，滚到任何位置都点得到 —— 它是访客浏览往期数据
+   的主入口，也是爬虫从主页发现 /football/<日期>/ 各归档页的内链起点。 */
+.btn.arch{color:var(--brand-d);border-color:#f0c88a;background:#fffaf1;font-weight:700}
+.btn.arch:hover{border-color:var(--brand);background:#fff3dd;color:var(--brand-d)}
+.btn.arch::before{content:"\1F4C5";margin-right:5px;font-weight:400}
 .stats{margin-left:auto;font-size:12px;color:#8a939e;white-space:nowrap}
 .stats em{font-style:normal;color:var(--brand-d);font-weight:700}
 /* 数据新鲜度标记：抓取时间距今多久 */
@@ -407,6 +414,10 @@ table.datatable{
       <option value="hpct">按主胜比例 ↓</option>
     </select>
     <button class="btn" id="toggleAll" type="button">全部折叠</button>
+    <!-- 历史归档入口（常驻）：指向归档索引页，访客可查阅往期每日数据。
+         这个 URL 是 archive.py 的 ARCHIVE_URL，索引页在第一次成功抓取时就生成且不会删除，
+         所以这里写死是安全的；改 slug 必须同步改 archive.py 的 ARCHIVE_SLUG。 -->
+    <a class="btn arch" href="https://90qu.com/football/archive/" title="查阅往期每日竞彩必发指数数据">历史归档</a>
     <div class="stats" id="stats"></div>
     <!-- 数据过期提示条（仅在当前源明显过期时出现，见 paintStale） -->
     <div class="stalebar" id="stalebar" style="display:none"></div>
