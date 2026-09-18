@@ -22,12 +22,18 @@
 CI 每次都是全新 checkout，不把这个文件落仓库，下一轮就不知道历史上出现过哪些日期。
 它由 workflow 的「回写数据快照到仓库」步骤提交 —— 与 `.baidu-push-state` 同样的待遇。
 
-⚠️ 三条硬约定（改这个文件前先读）：
-  1) **只在 publish.py 的 data_ok 为真时才生成**。抓取失败时磁盘上那份是「保留的上一份」，
-     拿它去生成归档，等于把旧内容重复写成某一天的归档（而且 CI 上那份还是仓库里的旧快照）。
-  2) **上传成功之后才把日期写进 `.archive-index.json`**。先记账后上传的话，
+⚠️ 四条硬约定（改这个文件前先读）：
+  1) **只在 publish.py `--finalize`（归档定稿轮）里生成**，不在每轮抓取后生成。
+     抓取失败时磁盘上那份是「保留的上一份」，拿它生成归档等于把旧内容重复写成
+     某一天的归档（CI 上那份更是仓库里的旧快照）。
+  2) **定稿时点统一为每天 16:30**（FINALIZE_HM）。竞彩必发只在北京 9:00-16:00 提供
+     数据，16:00 之后**再也抓不到**（实测：DOM 抽到 0 场），所以「当日最终数据」
+     只能用当天最后一次成功抓取、在 16:00 之后定稿。页面/描述/索引里的时间口径
+     一律写「<日期> 16:30 定稿」，**不写每轮各不相同的抓取时刻**
+     （2026-09-19 用户要求统一口径）。
+  3) **上传成功之后才把日期写进 `.archive-index.json`**。先记账后上传的话，
      一次上传失败就会在索引里留下一个线上并不存在的死链。
-  3) 归档页的日期取自数据里的 `fetchedAt[:10]`（北京时间），**不是**本机当天 ——
+  4) 归档页的日期取自数据里的 `fetchedAt[:10]`（北京时间），**不是**本机当天 ——
      页面显示的那份数据是哪天的，归档就挂在哪天，自洽。
 """
 import datetime
@@ -46,6 +52,14 @@ ARCHIVE_URL = "%s/%s/" % (FOOTBALL, ARCHIVE_SLUG)
 INDEX_PATH = os.path.join(ROOT, ".archive-index.json")
 LINKS_LIMIT = 30                            # 主页内链列最近多少天
 SITEMAP_DAYS = 1000                         # sitemap 最多列多少个归档日（防无限膨胀）
+
+# 「定稿」时刻 —— 唯一的文案来源，改这里就够，别在别处再写一遍 "16:30"。
+# 为什么是 16:30：数据源（竞彩必发）只在北京时间 9:00-16:00 提供数据，16:00 之后
+# 抓不到（DOM 抽 0 场）。所以当天数据的「最终版」= 16:00 前最后一次成功抓取，
+# 定稿动作安排在 16:30（CI 的 cron 也是这个点，见 spdex-update.yml）。
+# ⚠️ 它只影响**页面怎么写**；真正的定稿护栏在 publish.py --finalize：
+#    「数据日期 == 北京今天」+「已过 16:00」+「这天还没定稿过」。
+FINALIZE_HM = "16:30"
 
 WEEK_CN = "一二三四五六日"                    # weekday(): 周一 = 0
 
@@ -117,12 +131,6 @@ def data_day(d):
         return bj_today()
 
 
-def fetched_hm(d):
-    """抓取时间的 HH:MM，用于页面上的「数据更新于 …」。"""
-    at = str((d or {}).get("fetchedAt") or "")
-    return at[11:16] if len(at) >= 16 else ""
-
-
 # ---------------------------------------------------------------- 清单读写
 
 
@@ -171,6 +179,15 @@ def sorted_days(days=None):
     """全部日期，新的在前。"""
     days = load_days() if days is None else days
     return sorted(days.keys(), reverse=True)
+
+
+def is_final(days, day):
+    """这一天是否已经「定稿」（publish.py --finalize 成功传过）。
+
+    定稿之后就不再重写：16:50 的重试轮、以及之后任何轮次看到它都会直接跳过 ——
+    免得同一份内容反复上传、页面上的时间口径来回变。
+    """
+    return bool((days or {}).get(day, {}).get("fin"))
 
 
 def stat_of(d):
@@ -416,18 +433,22 @@ def _daynav(days, day, cls="daynav"):
 
 
 def archive_page(d, day, days):
-    """单日归档页。返回完整 HTML 字符串。"""
+    """单日归档页。返回完整 HTML 字符串。
+
+    ⚠️ 页面上的时间口径**一律是 FINALIZE_HM（16:30 定稿）**，不写实际抓取时刻：
+       抓取时刻每轮都不同（15:40 / 15:50 / 15:53…），写进页面既杂乱、又会让同一页
+       在 sitemap/百度眼里「一直在变」。归档页要表达的是「这一天最终长什么样」。
+    """
     arts, n = match_articles(d)
     stat = stat_of(d)
-    hm = fetched_hm(d)
     leagues = stat["lg"]
     cn = cn_date(day)
 
     title = "%s竞彩必发指数数据（共 %d 场） - 足球指数中心" % (cn, n)
     desc = ("%s竞彩足球必发指数归档数据：共 %d 场，逐场列出主胜、平局、客胜的买家挂牌、"
             "卖家挂牌、成交量、成交比例、赔付率、必发指数、平均欧指初终盘与凯利方差，"
-            "并附大小球指数。数据抓取于 %s。" %
-            (cn, n, (d.get("fetchedAt") or "当日服务时段内")))
+            "并附大小球指数。本页为该日数据的最终留档，%s %s 定稿。" %
+            (cn, n, day, FINALIZE_HM))
     lg_txt = "、".join(leagues[:8]) if leagues else ""
 
     parts = []
@@ -450,15 +471,13 @@ def archive_page(d, day, days):
                  '<a href="%s">历史归档</a> › <span>%s</span></p>'
                  % (FOOTBALL, ARCHIVE_URL, esc(day)))
     parts.append("<h1>%s 竞彩必发指数数据</h1>" % esc(cn))
-    lead = ("本页是 <b>%s</b> 这一天抓取到的竞彩足球必发（交易所）指数<b>归档快照</b>："
+    lead = ("本页是 <b>%s</b> 这一天采集到的竞彩足球必发（交易所）指数<b>归档快照</b>："
             "共 <b>%d 场</b>赛事%s。每场列出主胜、平局、客胜三项的买家挂牌、卖家挂牌、"
             "成交量、成交比例、赔付率、必发指数、赔指、盈亏，以及多家主流机构平均欧指的"
             "初盘与终盘、凯利指数、凯利方差、热度指数，并附大小球指数。"
             % (esc(day), n, ("，涉及%s" % esc(lg_txt)) if lg_txt else ""))
-    if hm:
-        lead += "本页数据抓取于 %s %s。" % (esc(day), esc(hm))
-    lead += ("归档页在当日服务时段内会持续更新到当天最后一版；时段结束后即固定为"
-             "当日截止数据。想看过往其它日期，见页面底部的历史归档列表。")
+    lead += ("本页为该日数据的<b>最终留档</b>，于 %s %s 定稿，此后不再随后续交易日变化。"
+             "想看过往其它日期，见页面底部的历史归档列表。" % (esc(day), FINALIZE_HM))
     parts.append('<p class="lead">%s</p>' % lead)
     parts.append(_daynav(days, day))
 
@@ -494,9 +513,9 @@ def index_page(days):
     """归档索引页 /football/archive/ ：按年月分组列出全部归档日。"""
     ds = sorted_days(days)
     title = "竞彩必发指数历史数据归档 - 足球指数中心"
-    desc = ("竞彩足球必发指数历史数据归档目录：按日期保存每日抓取的全部场次明细，"
+    desc = ("竞彩足球必发指数历史数据归档目录：按日期保存每日数据的最终留档（每天 %s 定稿），"
             "可回看任意一天的成交量、比例、赔付率、必发指数与凯利方差等数据。"
-            "共收录 %d 天。" % len(ds))
+            "共收录 %d 天。" % (FINALIZE_HM, len(ds)))
 
     parts = []
     parts.append('<!DOCTYPE html>\n<html lang="zh-CN">\n<head>')
@@ -519,19 +538,22 @@ def index_page(days):
     parts.append('<p class="crumb"><a href="https://90qu.com/">首页</a> › '
                  '<a href="%s/">竞彩必发指数数据</a> › <span>历史归档</span></p>' % FOOTBALL)
     parts.append("<h1>竞彩必发指数历史数据归档</h1>")
-    parts.append('<p class="lead">本站每天在数据服务时段内抓取竞彩足球必发（交易所）指数，'
-                 "并把它固化成一份当天独立的页面留档。下面是全部归档日期，"
+    parts.append('<p class="lead">本站每天采集竞彩足球必发（交易所）指数，'
+                 "并在当日数据定版后（每天 %s）把它固化成一份当天独立的页面留档。"
+                 "下面是全部归档日期，"
                  "点任意一天可以回看那天的全部场次明细（逐场给出主胜、平局、客胜的挂牌量、"
                  "成交量、成交比例、赔付率、必发指数、平均欧指与凯利方差，"
                  "并附大小球指数）。当前共收录 <b>%d</b> 天%s。</p>"
-                 % (len(ds), ("，最早到 %s" % cn_date(ds[-1])) if ds else ""))
+                 % (FINALIZE_HM, len(ds),
+                    ("，最早到 %s" % cn_date(ds[-1])) if ds else ""))
     parts.append('<div class="daynav"><a href="%s/">← 返回今日数据</a></div>' % FOOTBALL)
 
     if not ds:
         parts.append("<h2>还没有归档</h2>")
-        parts.append('<p class="lead">归档页会在每天首次成功抓取后自动生成，'
+        parts.append('<p class="lead">归档页会在每天 %s 归档定稿后自动生成，'
                      "现在还没有任何一天的数据被归档。请稍后再来，"
-                     '或先看 <a href="%s/">今日竞彩必发指数数据</a>。</p>' % FOOTBALL)
+                     '或先看 <a href="%s/">今日竞彩必发指数数据</a>。</p>'
+                     % (FINALIZE_HM, FOOTBALL))
     else:
         # 按「年-月」分组
         groups = {}
@@ -554,8 +576,10 @@ def index_page(days):
                                 ("　" + esc(tip)) if tip else "", esc(short_date(day)), meta))
             parts.append('<ul class="ylist">%s</ul>' % "".join(items))
 
-    parts.append('<div class="foot"><p>归档页内容为该日抓取到的数据快照，不随后续交易日变化。'
-                 '当日最新数据请看 <a href="%s/">竞彩必发指数数据</a>。</p></div>' % FOOTBALL)
+    parts.append('<div class="foot"><p>归档页内容为该日数据的最终留档（每天 %s 定稿），'
+                 '不随后续交易日变化。'
+                 '当日最新数据请看 <a href="%s/">竞彩必发指数数据</a>。</p></div>'
+                 % (FINALIZE_HM, FOOTBALL))
     parts.append("</div>")
     parts.append('<div class="sitefoot">数据由本站自动采集整理，仅供研究与参考，不构成任何建议。<br />'
                  '<a href="https://90qu.com/">90qu-足球数据网</a></div>')
@@ -583,9 +607,10 @@ def links_html(days=None, limit=LINKS_LIMIT):
     else:
         more = '<p class="archmore">全部归档见 <a href="%s">历史数据归档</a>。</p>' % ARCHIVE_URL
     return ("<h2>历史数据归档</h2>"
-            '<p class="archlead">每天的数据都会单独留档一份，按日期查看当天的全部场次明细'
-            "（最近 %d 天）：</p>"
-            '<ul class="archlist">%s</ul>%s' % (len(shown), "".join(items), more))
+            '<p class="archlead">每天的数据都会在当日定版后单独留档一份（每天 %s 定稿），'
+            "可按日期查看当天的全部场次明细（最近 %d 天）：</p>"
+            '<ul class="archlist">%s</ul>%s'
+            % (FINALIZE_HM, len(shown), "".join(items), more))
 
 
 def inject_links(page, block):
