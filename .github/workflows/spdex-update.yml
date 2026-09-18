@@ -127,6 +127,36 @@ jobs:
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
           exit 0
 
+      # 主动推送给百度（普通收录 → API提交）：
+      #   让百度尽快重抓 /football/ 与 /jc/，不用等爬虫自己排期。
+      #   ⚠️ 只在「本轮真抓到并上传了新数据」时推（rc=0 且 .publish-state 里 data_ok=1）；
+      #   ⚠️ 每个 URL 每天最多推一次 —— `--daily` 靠仓库里的 .baidu-push-state 记账，
+      #      该文件由下面的「回写」步骤提交，否则每轮都会重复推（新站配额只有 ~10 条/天）。
+      #   ⚠️ 推送失败绝不判红：本步骤一律 exit 0，真正的发布结果仍由「抓取并上传」的 rc 决定。
+      - name: 推送给百度
+        if: always() && steps.window.outputs.in_window == 'true'
+        env:
+          BAIDU_PUSH_SITE: ${{ secrets.BAIDU_PUSH_SITE }}
+          BAIDU_PUSH_TOKEN: ${{ secrets.BAIDU_PUSH_TOKEN }}
+        run: |
+          if [ "${{ steps.publish.outputs.rc }}" != "0" ]; then
+            echo "本轮发布没成功（rc=${{ steps.publish.outputs.rc }}）→ 不推百度"
+            exit 0
+          fi
+          if [ ! -f .publish-state ] || ! grep -q '^data_ok=1$' .publish-state; then
+            echo "本轮没抓到可上线的新数据 → 不推百度"
+            exit 0
+          fi
+          if [ -z "$BAIDU_PUSH_TOKEN" ]; then
+            echo "::warning::没配置 BAIDU_PUSH_TOKEN secret，跳过百度推送"
+            exit 0
+          fi
+          set +e
+          python baidu_push.py --daily 2>&1 | tee baidu-push.log
+          set -e
+          echo "--- 推送结果行 ---"
+          grep -E '^RESULT: ' baidu-push.log | tail -1 || true
+
       # 把本轮抓到的新数据回写仓库（2026-09-18 加固）：
       #   CI 每次都是全新 checkout，所谓「保留上一份」恢复的其实是**仓库里提交的那份快照**。
       #   仓库里的快照越旧，一旦某轮抓取失败仍把数据传上去，线上就被倒退得越多
@@ -152,6 +182,10 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add bf.json bf-inline.js
+          # 百度主动推送的「今天已推过哪些 URL」也要落仓库：
+          # CI 每次全新 checkout，不提交的话下一轮会当成「今天还没推」而重复推送，白烧配额。
+          # 它只记录 URL + 北京日期，不含任何凭据。
+          if [ -f .baidu-push-state ]; then git add .baidu-push-state; fi
           if git diff --cached --quiet; then
             echo "仓库里的快照与本轮数据一致，无需提交"
             exit 0
@@ -178,6 +212,9 @@ jobs:
             [ -n "$RESULT" ] || RESULT="RESULT: UNKNOWN - 日志里没有结果行"
             TAIL=$(tail -40 publish.log || true)
           fi
+          # 百度主动推送的结果（本轮没推就没有这个日志）
+          BAIDU=$(grep -E '^RESULT: ' baidu-push.log 2>/dev/null | tail -1 || true)
+          [ -n "$BAIDU" ] || BAIDU="（本轮未推送）"
           {
             echo "### 竞彩指数自动更新"
             echo ""
@@ -187,6 +224,7 @@ jobs:
             echo "| 北京预检 | ${BJ_NOW:-未知} |"
             echo "| 结束代码 | \`${RC:-未知}\` |"
             echo "| 结果 | \`$RESULT\` |"
+            echo "| 百度推送 | \`$BAIDU\` |"
             echo ""
             echo "<details><summary>日志末尾 40 行</summary>"
             echo ""
@@ -204,6 +242,7 @@ jobs:
           name: publish-log-${{ github.run_number }}
           path: |
             publish.log
+            baidu-push.log
             logs/
           retention-days: 14
 
