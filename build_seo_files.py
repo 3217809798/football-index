@@ -14,8 +14,10 @@
      （/football/<日期>/）。清单统一来自 archive.py 的 sitemap_entries()，
      所以归档页一生成就会进 sitemap，不需要到这里改代码。
 
-    ⚠️ 日常不用手动跑这个脚本：`publish.py` 每轮真抓到数据后会**顺手刷新并上传**
+    ⚠️ 日常不用手动跑这个脚本：`publish.py` 在建归档页的时候会**顺手刷新并上传**
        sitemap-data.xml（归档日一变 sitemap 就得跟着变，否则百度发现不了新归档页）。
+       而归档页只在**每天 16:30 的定稿轮**（`publish.py --finalize`）生成 ——
+       所以 sitemap 的日常刷新就发生在那一轮；抓取轮不动 sitemap。
        这里主要留作首次部署、以及 `--check` 体检。
 
 用法：
