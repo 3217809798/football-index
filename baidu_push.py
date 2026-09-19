@@ -10,15 +10,23 @@
               "not_same_site": [...], "not_valid": [...]}
   配额  GET  同一个地址（实测本账号返回 400，故 --quota 只作参考，不阻塞流程）
 
-⚠️ 三个实测坑（改这个脚本前先读）：
+⚠️ 四个实测坑（改这个脚本前先读）：
   1) `site` 必须**原样**拼进 query：`site=https://90qu.com`。
      一旦百分号编码成 `https%3A%2F%2F90qu.com`，接口返回
      `{"error":400,"message":"site init fail"}` —— 看着像「站点没验证」，其实是编码问题。
   2) 只能用 **http://data.zz.baidu.com**。https 那个域名证书不匹配，
      报 `CERTIFICATE_VERIFY_FAILED: Hostname mismatch`。
-  3) 新站配额约 **10 条/天**（返回里的 remain）。别拿真接口做试探，会烧配额。
+  3) 配额**比文档小得多**。2026-09-19 实测：当天只在 01:53 成功推过 2 条，
+     09:02 再推 4 条就 `HTTP 400 {"error":400,"message":"over quota"}`。
+     → 所以单轮上限 DEFAULT_MAX = **1**，一天最多也就 2~4 条
+       （靠 --daily 保证每个 URL 每天只推一次）。
+     → `over quota` 视为**正常上限**（RESULT: SKIP，退出码 0），不是故障：
+       配额用完之后当天怎么推都是这句，不必把它显示成红色。
      `site` 填 `https://90qu.com` / `http://90qu.com` / `90qu.com` 都收，
      但 `https://www.90qu.com` 会进 not_same_site（我们推的是裸域）。
+  4) 推什么最值：**新 URL 才值钱**。`/football/<今天>/` 归档页每天都是一个全新
+     URL，是主动推送最该花配额的地方；`/football/` 与 `/jc/` 是常年不变的老 URL，
+     靠 sitemap 的 lastmod 就能被重抓。清单顺序即优先级（见 default_urls）。
 
 凭据来源（两处，任一即可，都不进仓库）：
   1) 环境变量 BAIDU_PUSH_SITE / BAIDU_PUSH_TOKEN   ← CI 用 Actions Secrets 注入
@@ -30,19 +38,21 @@
   python baidu_push.py --daily               # ★CI 用的模式：每个 URL 每天最多推一次
   python baidu_push.py --url https://90qu.com/football/
   python baidu_push.py --url A B C           # 多条
-  python baidu_push.py --max 5               # 本轮最多推几条（默认 8，防烧配额）
+  python baidu_push.py --max 5               # 本轮最多推几条（默认 1，防烧配额）
   python baidu_push.py --quota               # 只看今日剩余配额
   python baidu_push.py --check               # 只校验配置，不发请求
   python baidu_push.py --dry-run             # 打印将要发的请求体，不发
 
 ⚠️ 为什么必须有 --daily：本工作流每 20 分钟跑一轮（一天 ~20 轮），
-   不加闸门的话 20 轮 × 2 条 = 40 次提交，而新站配额只有 10 条/天，中午就烧干。
+   不加闸门的话 20 轮 × 2 条 = 40 次提交，而配额是**个位数/天**，上午就烧干。
    状态写在 `.baidu-push-state`（JSON: {"last": {"<url>": "<北京时间日期>"}}）。
    ⚠️ CI 每次都是全新 checkout → 这个文件**必须回写进仓库**才能跨轮生效，
    见 .github/workflows/spdex-update.yml 的「回写数据快照到仓库」步骤。
 
 退出码（沿用本项目约定）：
   0 全部成功 / 1 配置或网络失败（要人介入） / 2 部分 URL 被拒
+  ⚠️ 配额用尽（over quota）算 0 —— 那是接口的正常上限，不是故障，
+     当天后续轮次会一直重试，配额恢复（通常次日）自动接上。
 输出最后一行恒为 `RESULT: OK|WARN|FAIL|SKIP - ...`，供 CI grep 判读。
 """
 import io
@@ -58,7 +68,10 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 CONF = os.path.join(ROOT, "baidu_push.json")
 STATE = os.path.join(ROOT, ".baidu-push-state")     # 每个 URL 最后被推送的北京时间日期
 ENDPOINT = "http://data.zz.baidu.com/urls"
-DEFAULT_MAX = 8                                     # 单轮最多推几条，防烧配额（新站约 10 条/天）
+# 单轮最多推几条。实测配额是个位数/天（09-19 推过 2 条之后，4 条的请求就 over quota），
+# 所以默认 **1**：每轮只推清单里最该推的那一条，一天下来靠 --daily 去重，
+# 总量 = 「今天新产生的 URL（1 条归档页）+ 兜底的主页」≈ 2 条/天。
+DEFAULT_MAX = 1
 
 
 def load_conf():
@@ -90,11 +103,13 @@ def build_url(site, token):
 def default_urls():
     """要推的 URL 清单，**按优先级排序**（顺序就是优先级）。
 
-    百度新站配额只有约 10 条/天，而 --max 会截断，所以顺序很有讲究：
+    配额是个位数/天，而 --max 默认只放 1 条过去，所以顺序直接决定推什么：
       1) 今天那天的归档页（/football/<今天>/）—— 每天都是一个全新 URL、全新内容，
-         是「主动推送」最该花配额的地方；
-      2) 主页 /football/ 与 /jc/ —— 内容天天变、URL 不变，推了能让百度尽快重抓；
-      3) 其余历史归档页（日期倒序）—— 正常情况下它们各自「当天」就推过了，
+         是「主动推送」最该花配额的地方（16:30 定稿轮才会出现）；
+      2) 主页 /football/ 与 /jc/ —— 内容天天变、URL 不变。归档页还没生成时
+         （白天各轮）就轮到它们，推了能催百度尽快重抓；
+      3) 归档索引页 /football/archive/；
+      4) 其余历史归档页（日期倒序）—— 正常情况下它们各自「当天」就推过了，
          --daily 的台账会把它们滤掉；排在这里只是兜底（比如某天几轮推送全失败）。
 
     ⚠️ 清单统一来自 archive.sitemap_entries()，和 sitemap 同源，别在这里另抄一份。
@@ -171,6 +186,9 @@ def push(urls, dry=False):
         print("!! HTTP %s %s | %s" % (e.code, e.reason, detail[:300]))
         if e.code in (401, 403):
             print("   → token 或站点不匹配，去 ziyuan.baidu.com 的「普通收录→API提交」重新复制")
+        elif "over quota" in detail.lower():
+            print("   → 当日配额已用尽（正常上限，不是配置问题）：等配额恢复，"
+                  "或把 --max 调小/等次日。")
         return {"_http_error": e.code, "_detail": detail}
     except Exception as e:
         print("!! 请求失败: %s" % e)
@@ -207,6 +225,22 @@ def quota():
 
 def arg_after(flag, argv):
     return argv[argv.index(flag) + 1] if flag in argv else None
+
+
+def is_over_quota(res):
+    """响应是不是「当日配额用尽」。
+
+    ⚠️ 实测有两种形态，两种都要算（2026-09-19）：
+       · HTTP 400 + 正文 {"error":400,"message":"over quota"}（push() 包成 _http_error）
+       · HTTP 200 + 同一个 JSON（有些账号走这条，会被当成正常 JSON 返回）
+    配额用尽是接口的**正常上限**，不是故障 —— 调用方要把它当 SKIP 而不是 FAIL，
+    否则 CI 每天都会飘一条红色假警报。
+    """
+    if not isinstance(res, dict):
+        return False
+    detail = str(res.get("_detail") or "")
+    msg = str(res.get("message") or "")
+    return "over quota" in (detail + " " + msg).lower()
 
 
 def main():
@@ -274,8 +308,18 @@ def main():
     if res is None:
         print("RESULT: SKIP - dry run")
         return 0
+    if is_over_quota(res):
+        print("百度当日主动推送配额已用尽（over quota）—— 本轮不推，后续轮次会自动重试；"
+              "配额恢复（通常次日）后接上。这不是故障。")
+        print("RESULT: SKIP - daily push quota exhausted")
+        return 0
     if res.get("_http_error") or res.get("_net_error") or "_raw" in res:
         print("RESULT: FAIL - push request failed")
+        return 1
+    # 接口用 HTTP 200 返错时（{"error":400,...}），上面几条都拦不住，这里兜一层
+    if res.get("error"):
+        print("!! 接口返回错误：%s" % res)
+        print("RESULT: FAIL - api error %s" % res.get("error"))
         return 1
 
     ok = int(res.get("success") or 0)
