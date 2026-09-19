@@ -15,6 +15,10 @@
 #      · finalize —— 北京 16:00-18:00：不抓取，只把当天最后一次抓到的数据定稿成归档页
 #      · skip     —— 其余时间：整个 job 几秒结束，不装依赖、不抓取、不上传
 #
+# ⚠️ 百度主动推送（普通收录 → API提交）只在 **finalize 轮**跑一次（2026-09-19 调整）：
+#    配额比文档小得多（实测推过 2 条之后 4 条的请求就 over quota），而一天里唯一的
+#    「全新 URL」就是 16:30 生成的 /football/<今天>/ 归档页 —— 配额全花在它身上。
+#
 # ⚠️ 归档为什么单独一轮（2026-09-19 用户要求）：数据到 16:00 才停止更新，而 16:00 之后
 #    我们就抓不到了 —— 服务时段内任何时刻生成的归档都只是「当日半成品」。改成每天 16:30
 #    统一「定稿」一次，归档页才真正代表「这一天最终长什么样」，页面上的时间口径也统一写成
@@ -174,51 +178,49 @@ jobs:
 
       # 主动推送给百度（普通收录 → API提交）：
       #   让百度尽快重抓数据页，不用等爬虫自己排期。
-      #   ⚠️ 只在「本轮真的产出了新内容」时推：
-      #        fetch 轮    → rc=0 且 .publish-state 里 data_ok=1
-      #        finalize 轮 → rc=0 且 .publish-state 里 archive_ok=1
-      #        （定稿轮最值得推：当天的归档页是一个全新的 URL）
+      #   ⚠️ **只在定稿轮推**（2026-09-19 调整）。原因：
+      #        ① 配额比文档小得多（09-19 实测：当天推过 2 条后，再推 4 条就
+      #           HTTP 400 {"error":400,"message":"over quota"}），
+      #           白天每 20 分钟推一轮会把配额的坑占满，轮到当天新归档页时反而推不动；
+      #        ② 主动推送最值钱的是**全新 URL**，而一天里唯一的新 URL 就是
+      #           16:30 才生成的 /football/<今天>/ 归档页；
+      #           /football/ 与 /jc/ 是常年不变的老 URL，靠 sitemap 的 lastmod 就会被重抓。
+      #   ⚠️ 推送对象由 baidu_push.py --max 1 截断成 1 条（清单顺序 = 优先级，
+      #      今天那天的归档页排第一；万一那天没生成归档，就退化成推主页）。
       #   ⚠️ 每个 URL 每天最多推一次 —— `--daily` 靠仓库里的 .baidu-push-state 记账，
-      #      该文件由下面的「回写」步骤提交，否则每轮都会重复推（新站配额只有 ~10 条/天）。
+      #      该文件由下面的「回写」步骤提交，否则每轮都会重复推。
       #   ⚠️ 推送失败绝不判红：本步骤一律 exit 0，真正的发布结果仍由上面两步的 rc 决定。
+      #      配额用尽（over quota）在脚本里算 SKIP，不算 FAIL。
       - name: 推送给百度
-        if: always() && steps.window.outputs.mode != 'skip'
+        if: always() && steps.window.outputs.mode == 'finalize'
         env:
           MODE: ${{ steps.window.outputs.mode }}
-          PUB_RC: ${{ steps.publish.outputs.rc }}
           FIN_RC: ${{ steps.finalize.outputs.rc }}
           BAIDU_PUSH_SITE: ${{ secrets.BAIDU_PUSH_SITE }}
           BAIDU_PUSH_TOKEN: ${{ secrets.BAIDU_PUSH_TOKEN }}
         run: |
+          # 这个步骤只在定稿轮跑（见步骤条件），所以只需要认定稿轮的两个前提：
+          #   ① 定稿本身成功（rc=0）  ② 状态里 archive_ok=1（本轮确实产出了新归档）
+          # ⚠️ 定稿轮不抓数据，data_ok 恒为 0 —— 拿 data_ok 判断会永远不推。
           if [ ! -f .publish-state ]; then
-            echo "没有 .publish-state（没跑到写状态那一步）→ 不推百度"
+            echo "没有 .publish-state（定稿轮整体跳过：已定稿过 / 还没到定稿时间 / 今天没数据）→ 不推百度"
             exit 0
           fi
-          if [ "$MODE" = "fetch" ]; then
-            if [ "$PUB_RC" != "0" ]; then
-              echo "本轮抓取没成功（rc=$PUB_RC）→ 不推百度"
-              exit 0
-            fi
-            if ! grep -q '^data_ok=1$' .publish-state; then
-              echo "本轮没抓到可上线的新数据 → 不推百度"
-              exit 0
-            fi
-          else
-            if [ "$FIN_RC" != "0" ]; then
-              echo "本轮归档定稿没成功（rc=$FIN_RC）→ 不推百度"
-              exit 0
-            fi
-            if ! grep -q '^archive_ok=1$' .publish-state; then
-              echo "本轮没有新定稿的归档（已定稿过 / 还没到定稿时间 / 今天没数据）→ 不推百度"
-              exit 0
-            fi
+          if [ "$FIN_RC" != "0" ]; then
+            echo "本轮归档定稿没成功（rc=$FIN_RC）→ 不推百度"
+            exit 0
+          fi
+          if ! grep -q '^archive_ok=1$' .publish-state; then
+            echo "本轮没有新定稿的归档 → 不推百度"
+            exit 0
           fi
           if [ -z "$BAIDU_PUSH_TOKEN" ]; then
             echo "::warning::没配置 BAIDU_PUSH_TOKEN secret，跳过百度推送"
             exit 0
           fi
           set +e
-          python baidu_push.py --daily 2>&1 | tee baidu-push.log
+          # --max 1：把当日限额花在唯一的那个新 URL（今天新生成的归档页）上
+          python baidu_push.py --daily --max 1 2>&1 | tee baidu-push.log
           set -e
           echo "--- 推送结果行 ---"
           grep -E '^RESULT: ' baidu-push.log | tail -1 || true
