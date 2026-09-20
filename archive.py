@@ -338,8 +338,8 @@ NAV_HTML = """<nav class="sitenav">
       <li><a href="https://90qu.com/archives/category/vip">今日概览</a></li>
       <li><a href="https://90qu.com/jc/">竞足数据</a></li>
       <li class="on"><a href="https://90qu.com/football/">必发数据</a></li>
-      <li><a href="https://90qu.com/archives/category/%e6%95%99%e7%a8%8b">数据教程</a></li>
-      <li><a href="https://90qu.com/archives/category/ziyuan">资源下载</a></li>
+      <li><a href="https://90qu.com/xg/">xG积分榜</a></li>
+      <li><a href="https://90qu.com/archives/category/%e6%95%99%e7%a8%8b">数据资源</a></li>
     </ul>
   </div>
 </nav>"""
