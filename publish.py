@@ -32,6 +32,9 @@ publish.py —— 把竞彩指数页面发布到静态虚拟主机（如 90qu.co
    页面上的时间口径也统一写成「<日期> 16:30 定稿」，不再写每轮各不相同的抓取时刻。
    --finalize 的三条护栏：① 数据日期必须是北京今天；② 必须已过 16:00；
    ③ 这一天还没定稿过（清单里没有 fin 标记）。`--force` 可越过全部护栏，手工补历史时用。
+   ⚠️ 它还会**顺带重建 /football/ 主页**（2026-09-20 加）：主页那条「历史数据」内链
+      用的是归档清单，而白天各轮重建主页时当天还没归档，所以定稿轮必须在同一轮内
+      用「含当天的清单」重建一次，否则主页上永远缺当天那条内链（次日才补上）。
    ⚠️ CI 跑 `--finalize --upload`；本地不加 --upload 只生成到 dist/，不联网。
 
 首次运行会生成 publish.json 配置模板，填好 FTP 信息后再跑 --upload。
@@ -552,23 +555,22 @@ def inject_static(page, block):
     return page[:a + len(STATIC_START)] + block + page[b:]
 
 
-def build_dist(use_spdex=True):
-    sync_inline(use_spdex)
+def render_home(links_days=None):
+    """生成主页 HTML（静态正文 + 历史归档内链），返回字符串；读不到模板时返回 None。
 
+    ⚠️ 抽成独立函数是为了让**定稿轮也能重建主页**（见 build_archive_files(also_home)）：
+       白天各轮重建主页时，当天的归档链接还不在清单里（链路是「先上传归档、
+       成功后才 save_days」）。所以 16:30 定稿之后必须在**同一轮内**用「含当天的清单」
+       再重建一次主页 —— 否则 /football/ 上永远缺当天那条内链，
+       要等到次日第一轮抓取才补上（2026-09-20 实测：主页只链到 09-19 与 09-17，
+       而 /football/archive/ 索引页里 09-20 早就有了）。
+    ⚠️ links_days 传入时用**它**算内链（定稿轮传 days_new），不传则读磁盘清单。
+    ⚠️ 静态正文取自 bf.json（磁盘上当天最后一份数据），与白天最后一轮上传的内容一致。
+    """
     page_src = os.path.join(ROOT, "index.html")
     if not os.path.exists(page_src):
         log("缺少 index.html")
-        return False
-
-    # 只要求「启用的源」有数据；已下线的源不再进包
-    data_files = []
-    for p in active_data_files(use_spdex):
-        if not os.path.exists(p):
-            log("缺少 %s，先运行抓取" % os.path.basename(p))
-            return False
-        data_files.append(p)
-
-    os.makedirs(DIST, exist_ok=True)
+        return None
     # 静态发布包：关掉「探测本地服务」的分支，否则每个访客都会白打一次 /api/status 404
     with open(page_src, encoding="utf-8") as f:
         page = f.read()
@@ -595,16 +597,39 @@ def build_dist(use_spdex=True):
     # 所以访客也能点进去 —— 这是爬虫发现历史归档页的主入口。
     # 它只是导航、不依赖今天的抓取结果，所以抓取失败的那几轮照样注入。
     try:
-        links = archive.links_html()
+        links = archive.links_html(links_days)
         if links:
             page, hit = archive.inject_links(page, links)
             if hit:
-                log("  历史归档内链已注入（共 %d 天归档）" % len(archive.sorted_days()))
+                log("  历史归档内链已注入（共 %d 天归档）" % len(archive.sorted_days(links_days)))
             else:
                 log("  提示：index.html 里没找到 %s / %s 锚点，历史内链未注入"
                     % (archive.LINKS_START, archive.LINKS_END))
     except Exception as exc:
         log("  提示：历史内链生成失败（%s）" % exc)
+    return page
+
+
+def build_dist(use_spdex=True):
+    sync_inline(use_spdex)
+
+    page_src = os.path.join(ROOT, "index.html")
+    if not os.path.exists(page_src):
+        log("缺少 index.html")
+        return False
+
+    # 只要求「启用的源」有数据；已下线的源不再进包
+    data_files = []
+    for p in active_data_files(use_spdex):
+        if not os.path.exists(p):
+            log("缺少 %s，先运行抓取" % os.path.basename(p))
+            return False
+        data_files.append(p)
+
+    os.makedirs(DIST, exist_ok=True)
+    page = render_home()
+    if page is None:
+        return False
 
     with open(os.path.join(DIST, "index.html"), "w", encoding="utf-8", newline="\n") as f:
         f.write(page)
@@ -671,7 +696,7 @@ def site_root_of(conf):
     return rd.rsplit("/", 1)[0] if "/" in rd else ""
 
 
-def build_archive_files(conf, d, final=False):
+def build_archive_files(conf, d, final=False, also_home=False):
     """生成当天归档页 + 归档索引页 + sitemap，返回 (上传清单, 新清单, 归档日期)。
 
     ⚠️ 只在「数据确实是当天的」时候调用（--finalize 已把这件事校验过一遍）。
@@ -684,8 +709,13 @@ def build_archive_files(conf, d, final=False):
     标记的作用是「这一天已经定稿过了」—— 16:50 的重试轮、以及之后任何轮次
     看到它就直接跳过，同一份内容不会被反复上传。
 
+    also_home=True 时**顺带重建主页**（dist/index.html）并把它加进上传清单。
+    ⚠️ 这件事必须在本函数里做、不能放到 run() 里另起一次：主页内链要用
+       **含当天的 days_new**，而 days_new 只在本函数内构造、且要等上传成功才落盘。
+       放到函数外就只能读到磁盘上那份「还没有当天」的清单，等于没修。
+
     典型调用（run()）：
-        files, days, day = build_archive_files(conf, bf_data, final=True)
+        files, days, day = build_archive_files(conf, bf_data, final=True, also_home=True)
     """
     days = archive.load_days()
     days_new = dict(days)
@@ -700,6 +730,19 @@ def build_archive_files(conf, d, final=False):
 
     _, pages = archive.write_archive(d, days_new, DIST)
     files = archive.archive_files(pages)
+
+    # 定稿轮补上「当天的内链」：白天各轮重建主页时这天还没归档，
+    # 不在这里重建的话 /football/ 要等到次日第一轮抓取才链上它（2026-09-20 修）。
+    if also_home:
+        home = render_home(days_new)
+        if home:
+            with open(os.path.join(DIST, "index.html"), "w", encoding="utf-8", newline="\n") as f:
+                f.write(home)
+            files.append((os.path.join(DIST, "index.html"), "index.html"))
+            log("  主页已重建：%s 的历史内链已补进 /football/（清单共 %d 天）"
+                % (day, len(days_new)))
+        else:
+            log("  提示：主页模板缺失，本轮不重建主页（归档页与 sitemap 照常上传）")
 
     # sitemap 也在这里刷新：归档日一变、sitemap 不跟着变，百度就永远发现不了新归档页。
     # 它挂在站点根（比 remote_dir 高一层），所以用 abs: 规格把它送出 football/ 目录。
@@ -1111,7 +1154,7 @@ def run(args):
 
         log("归档定稿：数据采集于 %s → 按 %s %s 定稿"
             % (d.get("fetchedAt") or "未知", day, archive.FINALIZE_HM))
-        files, days_new, day = build_archive_files(conf, d, final=True)
+        files, days_new, day = build_archive_files(conf, d, final=True, also_home=True)
 
         if not args.upload:
             log("未加 --upload：归档页已生成到 dist/，没有联网上传")
