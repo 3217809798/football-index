@@ -18,15 +18,17 @@
      报 `CERTIFICATE_VERIFY_FAILED: Hostname mismatch`。
   3) 配额**比文档小得多**。2026-09-19 实测：当天只在 01:53 成功推过 2 条，
      09:02 再推 4 条就 `HTTP 400 {"error":400,"message":"over quota"}`。
-     → 所以单轮上限 DEFAULT_MAX = **1**，一天最多也就 2~4 条
+     → 所以配额按**个位数**做预算：单轮上限 DEFAULT_MAX = **3**（逐条发送，
+       配额只剩 1 条时也能推成 1 条），一天最多 2~4 条
        （靠 --daily 保证每个 URL 每天只推一次）。
      → `over quota` 视为**正常上限**（RESULT: SKIP，退出码 0），不是故障：
        配额用完之后当天怎么推都是这句，不必把它显示成红色。
      `site` 填 `https://90qu.com` / `http://90qu.com` / `90qu.com` 都收，
      但 `https://www.90qu.com` 会进 not_same_site（我们推的是裸域）。
-  4) 推什么最值：**新 URL 才值钱**。`/football/<今天>/` 归档页每天都是一个全新
-     URL，是主动推送最该花配额的地方；`/football/` 与 `/jc/` 是常年不变的老 URL，
-     靠 sitemap 的 lastmod 就能被重抓。清单顺序即优先级（见 default_urls）。
+  4) 推什么最值：**新 URL 优先**。`/football/<今天>/`、`/jc/<今天>/` 归档页每天都是一个全新
+     URL，是主动推送最该花配额的地方。老 URL（三个栏目主页）内容天天变、URL 不变，
+     主要靠 sitemap 的 lastmod 重抓；**但实测有的栏目页百度一次都没抓过**，
+     所以仍要定期主动推一次 → 单独一档、做轮转（顺序见 prioritize，不是 default_urls 的书写序）。
   5) **一条 URL 一次请求**（2026-09-20 修）。原来是把一批 URL 拼成一个请求体发出去，
      而百度是**整批校验**：只要一批里超出剩余配额，整批都回 over quota，一条也进不去。
      现在改成逐条发送，最该推的排第一，配额用完立刻停 —— 「推一条算一条」。
