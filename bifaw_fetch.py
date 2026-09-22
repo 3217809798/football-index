@@ -27,6 +27,12 @@ import re
 import sys
 import time
 
+# 竞彩星期序号（周X0XX）补充源。导入失败不影响主流程（CI 上若缺模块也照常抓必发）。
+try:
+    import nowscore_jc
+except Exception:
+    nowscore_jc = None
+
 ROOT = os.path.dirname(os.path.abspath(__file__))
 LOGDIR = os.path.join(ROOT, "logs")
 PROFILE = os.path.join(ROOT, "bifaw_profile")          # Chrome 用户目录（持久化登录态）
@@ -513,6 +519,16 @@ def fetch_once(out, capture=False, headless=False, user="", pwd="", login_only=F
             return 2, "fetch rejected"
 
         data = b.build(got["raw"])
+
+        # 补充竞彩星期序号：nowscore 竞彩销售页仍带「周X序号」，按（主客队 / 联赛+时间）
+        # 交叉匹配回填 leagueText。失败（网络/解析）即跳过，绝不影响必发抓取主流程。
+        try:
+            if nowscore_jc is not None:
+                n = nowscore_jc.enrich(data["matches"])
+                log("竞彩序号补充：%d/%d 场匹配到周X序号" % (n, len(data["matches"])))
+        except Exception as e:
+            log("竞彩序号补充跳过：%s" % e)
+
         ok, why = check_data(data)
         log("数据校验：%s（%s）" % ("通过" if ok else "不通过", why))
         if not ok:
