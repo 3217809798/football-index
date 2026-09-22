@@ -723,7 +723,10 @@ def build_archive_files(conf, d, final=False, also_home=False):
     # 合并而不是整条替换：这天可能已经有 fin 标记（比如 16:50 的重试轮），
     # 直接覆盖会把标记抹掉，于是又「没定稿」了。
     entry = dict(days.get(day) or {})
-    entry.update(archive.stat_of(d))
+    # 星期序号过滤（archive.keep_same_weekday）：归档索引里记录的场次数 / 联赛，
+    # 必须与当天归档页一致 —— 只算归档日当天的比赛，不算源站一次吐出的其它天场次。
+    _kept = archive.keep_same_weekday(d.get("matches") or [], day)
+    entry.update(archive.stat_of({"matches": _kept}))
     if final:
         entry["fin"] = True
     days_new[day] = entry
