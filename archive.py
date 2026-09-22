@@ -41,6 +41,7 @@ import html
 import io
 import json
 import os
+import re
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -129,6 +130,48 @@ def data_day(d):
         return day
     except Exception:
         return bj_today()
+
+
+# ---------------------------------------------------------------- 星期序号过滤
+# ⚠️ 硬约定（需求 10，2026-09-19 定）：归档页只留「星期序号 == 归档日星期」的比赛。
+#
+# 竞彩必发源一次会吐出**多天**赛事：周六那天的抓取里往往混着「周日002-周日030」
+# 这种次日的场次（序号挂在 leagueText 上，形如 `日职联(周六001)` / `英超(周日002)`）。
+# 归档页按「哪天」挂 URL、标题/正文都写死当天日期，如果一页里塞两天比赛，
+# 长尾词（"9月19日 竞彩 必发"）会对不上、还会把不属于这天的序号显示出来。
+# 所以渲染归档页前，必须把非当天的星期序号场次删掉。
+# 没有星期序号（tag=None）的比赛保守保留，避免误删真实数据。
+def weekday_tag_of(day):
+    """归档日期 -> 期望保留的星期标签，如 2026-09-19（周六）-> '周六'。"""
+    try:
+        d = datetime.datetime.strptime(str(day)[:10], "%Y-%m-%d")
+        return "周" + WEEK_CN[d.weekday()]
+    except Exception:
+        return None
+
+
+_WEEKDAY_RE = re.compile(r"周[一二三四五六日]")
+
+
+def match_weekday_tag(m):
+    """从一场比赛里抽星期序号标签：leagueText 形如 '日职联(周六001)' -> '周六'。
+    抽不到返回 None（按「无星期序号」处理，不删）。"""
+    s = str((m or {}).get("leagueText") or (m or {}).get("league") or "")
+    hit = _WEEKDAY_RE.search(s)
+    return hit.group(0) if hit else None
+
+
+def keep_same_weekday(matches, day):
+    """归档过滤：只留「星期序号 == 归档日星期」的比赛，删掉其它天的。"""
+    tag = weekday_tag_of(day)
+    if not tag:
+        return list(matches or [])
+    out = []
+    for m in (matches or []):
+        t = match_weekday_tag(m)
+        if t is None or t == tag:
+            out.append(m)
+    return out
 
 
 # ---------------------------------------------------------------- 清单读写
@@ -439,8 +482,13 @@ def archive_page(d, day, days):
        抓取时刻每轮都不同（15:40 / 15:50 / 15:53…），写进页面既杂乱、又会让同一页
        在 sitemap/百度眼里「一直在变」。归档页要表达的是「这一天最终长什么样」。
     """
-    arts, n = match_articles(d)
-    stat = stat_of(d)
+    # 星期序号过滤（硬约定）：只留归档日当天的比赛，删掉其它天的。
+    # 拷一份 d 把 matches 换成过滤后的，match_articles / stat_of 都读它。
+    kept = keep_same_weekday(d.get("matches") or [], day)
+    dd = dict(d)
+    dd["matches"] = kept
+    arts, n = match_articles(dd)
+    stat = stat_of(dd)
     leagues = stat["lg"]
     cn = cn_date(day)
 
