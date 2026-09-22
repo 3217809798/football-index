@@ -132,71 +132,55 @@ def data_day(d):
         return bj_today()
 
 
-# ---------------------------------------------------------------- 归档过滤（按开赛时间）
-# ⚠️ 2026-09-22 起改用「按开赛具体时间」归档（替代已失效的星期序号过滤）。
+# ---------------------------------------------------------------- 归档过滤（按星期序号）
+# ⚠️ 2026-09-22 上午曾短暂改用「按开赛时间」归档；当天中午又切回「按星期序号」归档
+#    （nowscore 补充源已能可靠地把周X序号补回 leagueText，见 MEMORY.md 的 nowscore 小节）。
 #
-# 旧规则：源站 leagueText 带「周X序号」前缀（如 亚冠联2(周六001)），靠它把一次抓取
-#   吐出的多天赛事拆回「各归各的归档日」。但 bifaw 从 09-21 起不再返回该前缀
-#   （leagueText 变空），旧过滤彻底失效（见 MEMORY.md）。
-# 新规则（用户 2026-09-22 定）：归档日 D 只展示开赛时间在
-#   [D 12:00, D+1 11:59] 这一「当日12:00 至 次日11:59」窗口内的比赛。
-#   理由：竞彩一期常跨自然日（周六的赛事可能踢到周日清晨），用「正午对齐」的 24h 窗口
-#   比「自然日零点」更贴合「比赛日」口径（与 titan007 / forebet 的 noon-to-noon 约定一致）。
-#   没有可解析开赛时间的比赛保守保留，避免误删真实数据。
+# 规则：归档日 D 只展示 leagueText 里星期序号 == D 的星期 的比赛
+#   （如 2026-09-22 周二 → 只留「周二00X」这类）。
+#   竞彩必发源一次抓取会吐出多天赛事（周六那天的抓取里常混着周日的场次），
+#   星期序号是「这场属哪一期竞彩」的权威标记 —— 由 nowscore 竞彩销售页提供，
+#   比按开赛时间推算更准：凌晨场归前一销售期、不会被 noon-to-noon 窗口错放。
+#   没有星期序号（enrich 失败 / 源站暂无）的比赛保守保留，避免误删真实数据。
+#
+# ⚠️ 归档日 D 的星期取自 D 的日历星期，与 nowscore 的「竞彩销售期星期」在绝大多数
+#   情况下一致；个别跨凌晨的销售期边界由 nowscore 的 name 属性决定，本函数直接信任
+#   leagueText 里 nowscore 写回的星期，不自行推算。
 
-_KICKOFF_RE = re.compile(r"(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{1,2})")
+_WEEKDAY_RE = re.compile(r"周[一二三四五六日]")
 
 
-def parse_kickoff(s, year):
-    """把 'MM-DD HH:MM' 解析成带 year 的 datetime；解析失败返回 None。
-
-    只认 '月-日 时:分' 这种源站格式；year 从归档日取（kickoff 不带年份）。
-    """
-    if not s:
-        return None
-    m = _KICKOFF_RE.search(str(s))
-    if not m:
-        return None
-    mo, da, hh, mi = (int(x) for x in m.groups())
-    if not (1 <= mo <= 12 and 1 <= da <= 31 and 0 <= hh <= 23 and 0 <= mi <= 59):
-        return None
+def weekday_tag_of(day):
+    """归档日期 -> 期望保留的星期标签，如 2026-09-22（周二）-> '周二'。"""
     try:
-        return datetime.datetime(year, mo, da, hh, mi)
+        d = datetime.datetime.strptime(str(day)[:10], "%Y-%m-%d")
+        return "周" + WEEK_CN[d.weekday()]
     except Exception:
         return None
 
 
-def keep_same_matchday(matches, day):
-    """归档过滤（2026-09-22 改）：只留开赛时间在 [归档日 12:00, 次日 11:59] 窗口内的比赛。
+def match_weekday_tag(m):
+    """从一场比赛里抽星期序号标签：leagueText 形如 '日职联(周六001)' -> '周六'。
 
-    day: 'YYYY-MM-DD'。跨年时按「相差 >300 天」兜底调 year，正常赛季不受影响。
-    没有可解析开赛时间的比赛保守保留（按「无开赛时间」处理，不删）。
+    抽不到返回 None（按「无星期序号」处理，不删）。
     """
-    try:
-        d0 = datetime.datetime.strptime(str(day)[:10], "%Y-%m-%d")
-    except Exception:
+    s = str((m or {}).get("leagueText") or "")
+    hit = _WEEKDAY_RE.search(s)
+    return hit.group(0) if hit else None
+
+
+def keep_same_weekday(matches, day):
+    """归档过滤：只留「星期序号 == 归档日星期」的比赛，删掉其它天的。
+
+    没有星期序号（match_weekday_tag 返 None）的比赛保守保留，避免误删真实数据。
+    """
+    tag = weekday_tag_of(day)
+    if not tag:
         return list(matches or [])
-    year = d0.year
-    win_start = d0.replace(hour=12, minute=0, second=0, microsecond=0)
-    win_end = (d0 + datetime.timedelta(days=1)).replace(hour=11, minute=59, second=59)
     out = []
     for m in (matches or []):
-        ko = parse_kickoff(m.get("kickoff"), year)
-        if ko is None:
-            out.append(m)                       # 保守保留
-            continue
-        # 跨年兜底：kickoff 明显早于窗口起点 -> 当作下一年的同一天；明显晚于窗口终点 -> 上一年。
-        if (win_start - ko).days > 300:
-            try:
-                ko = ko.replace(year=year + 1)
-            except Exception:
-                pass
-        elif (ko - win_end).days > 300:
-            try:
-                ko = ko.replace(year=year - 1)
-            except Exception:
-                pass
-        if win_start <= ko <= win_end:
+        t = match_weekday_tag(m)
+        if t is None or t == tag:
             out.append(m)
     return out
 
@@ -509,9 +493,9 @@ def archive_page(d, day, days):
        抓取时刻每轮都不同（15:40 / 15:50 / 15:53…），写进页面既杂乱、又会让同一页
        在 sitemap/百度眼里「一直在变」。归档页要表达的是「这一天最终长什么样」。
     """
-    # 按开赛时间过滤（硬约定，2026-09-22 改）：只留开赛在 [当日12:00, 次日11:59]
-    # 窗口内的比赛；拷一份 d 把 matches 换成过滤后的，match_articles / stat_of 都读它。
-    kept = keep_same_matchday(d.get("matches") or [], day)
+    # 按星期序号过滤（硬约定）：只留归档日当天的比赛（leagueText 里的周X序号 == 当天星期）；
+    # 拷一份 d 把 matches 换成过滤后的，match_articles / stat_of 都读它。
+    kept = keep_same_weekday(d.get("matches") or [], day)
     dd = dict(d)
     dd["matches"] = kept
     arts, n = match_articles(dd)
