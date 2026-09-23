@@ -400,6 +400,7 @@ NAV_HTML = """<nav class="sitenav">
     <ul class="sn-menu">
       <li><a href="https://90qu.com/archives/category/vip">今日概览</a></li>
       <li><a href="https://90qu.com/jc/">竞足数据</a></li>
+      <li><a href="https://90qu.com/article/">前瞻&amp;复盘</a></li>
       <li class="on"><a href="https://90qu.com/football/">必发数据</a></li>
       <li><a href="https://90qu.com/xg/">xG积分榜</a></li>
       <li><a href="https://90qu.com/archives/category/%e6%95%99%e7%a8%8b">数据资源</a></li>
