@@ -26,6 +26,7 @@ nowscore 的竞彩销售页（buy/jingcai.aspx）仍然按竞彩期列出「周�
 nowscore 抓不到 / 解析不出 / 网络异常 → 不动 leagueText（保持当前空值），绝不影响主流程。
 本模块也不向任何发布物写入「来源」标识——补进去的只是中性的竞彩期号，不是源站名。
 """
+import difflib
 import os
 import re
 import sys
@@ -145,10 +146,21 @@ def _parse(html):
 
 
 def _team_match(a, b):
-    """队名对上：完全相同，或互为前缀（容错缩写）。"""
+    """队名对上：完全相同、互为前缀（容错缩写）、或编辑相似度足够高（容错译名）。
+
+    相似度兜底的由来（2026-10-08）：必发源写「帕尔梅拉斯」、nowscore 写「帕梅拉斯」，
+    差一个「尔」字——既不相同也互不为前缀，Tier1 永远匹配不上；而该场又与同联赛
+    另一场开赛时间相同，Tier2 因「多候选不唯一」也放弃 → 这场永远拿不到序号，
+    首页必发精简版（只收带 (周X###) 编号的场次）就把它整行漏掉。
+    SequenceMatcher ratio（帕尔梅拉斯 vs 帕梅拉斯 = 0.889）≥ 0.85 视为同一队。
+    短名误伤风险可控：Tier1 要求主客两队**同时**对上 + 匹配分 > 0（联赛或时间支撑），
+    像「巴竞技/米竞技」这类差一个字的真实不同队 ratio 只有 0.667，过不了 0.85。
+    """
     if not a or not b:
         return False
-    return a == b or a.startswith(b) or b.startswith(a)
+    if a == b or a.startswith(b) or b.startswith(a):
+        return True
+    return difflib.SequenceMatcher(None, a, b).ratio() >= 0.85
 
 
 def _score(row, bl, bh, ba, bhm):
@@ -174,9 +186,8 @@ def enrich(matches):
     竞彩期号（name+序号），不自己推算星期：
       Tier1  以（主队、客队）为主，联赛 / 开赛 HH:MM 作交叉校验；队名允许互为前缀
              （容错 nowscore 的常见缩写，如「米尔顿」vs 我们的「米尔顿凯恩斯」）。
-      Tier2  队名对不上（如亚运队被缩成「韩国亚/沙特亚」）时，退回（联赛 + 开赛 HH:MM）
-             精确匹配——同一场真实比赛两边联赛与开赛时间必然一致，且要求全局唯一，
-             避免同名不同场的误补。
+      Tier2  队名对不上时，退回（联赛 + 开赛 HH:MM）：唯一候选直接认；多候选时用
+             「主客队名相似度之和」挑**严格最优**（领先次优 0.3 以上才认），平手放弃。
     """
     try:
         rows = fetch_rows()
@@ -201,12 +212,21 @@ def enrich(matches):
             best = max(cands, key=lambda r: _score(r, bl, bh, ba, bhm))
             if _score(best, bl, bh, ba, bhm) > 0:   # 须有联赛或时间支撑
                 chosen = best
-        # ---- Tier2：联赛 + 开赛时间 兜底（须全局唯一）----
+        # ---- Tier2：联赛 + 开赛时间 兜底 ----
         if chosen is None:
             lh = [r for r in rows
                   if _league_ok(r["league"], bl) and bhm and r["hm"] and bhm == r["hm"]]
             if len(lh) == 1:
                 chosen = lh[0]
+            elif len(lh) > 1:
+                # 同联赛同时刻多场（如巴西甲 08:30 两场连开）：用「主客两队队名相似度之和」
+                # 挑出**严格最优**的一家。两队都比次优明显更像才认，平手就放弃（宁缺勿错）。
+                def _sim2(r):
+                    return (difflib.SequenceMatcher(None, r["home"], bh).ratio()
+                            + difflib.SequenceMatcher(None, r["away"], ba).ratio())
+                scored = sorted(lh, key=_sim2, reverse=True)
+                if _sim2(scored[0]) - _sim2(scored[1]) > 0.3:
+                    chosen = scored[0]
         if chosen is None:
             continue
         tag = "%s%s" % (chosen["weekday"], chosen["seq"])
