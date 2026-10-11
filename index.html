@@ -41,13 +41,14 @@ body{
 }
 a{color:#333;text-decoration:none}
 a:hover{color:#c60}
-.wrap{width:986px;margin:0 auto;background:#fff;min-height:100vh;box-shadow:0 0 24px rgba(31,45,61,.08)}
+.wrap{width:1280px;max-width:100%;margin:0 auto;background:#fff;min-height:100vh;box-shadow:0 0 24px rgba(31,45,61,.08)}
 
 /* ============ 站点导航条 ============
    照 90qu.com 首页（zibll 主题）复刻：底色 #216d01、白色 15px 菜单、同一个 logo。
    两点刻意的差异：
-   1) 内层宽度对齐本页正文 986px —— 否则宽屏上 logo 会跑到最左边，
+   1) 内层宽度对齐本页正文 1280px —— 否则宽屏上 logo 会跑到最左边，
       与下方白色面板的左边缘对不齐，看起来像两截；
+      （2026-10-10 由 986px 改为 1280px，与首页 / /jc/ / /xg/ / /article/ 统一。）
    2) 小屏（≤760px）收成汉堡菜单并且**不再吸顶**，把竖屏高度让给数据工具条。
    导航条一改高度，记得同步 :root 的 --navh（工具条与 toast 都靠它避让）。 */
 .sitenav{
@@ -56,7 +57,7 @@ a:hover{color:#c60}
   box-shadow:0 1px 0 rgba(0,0,0,.12),0 2px 8px rgba(0,0,0,.14)
 }
 .sitenav-in{
-  max-width:986px;margin:0 auto;padding:0 12px;height:var(--navh);
+  max-width:1280px;margin:0 auto;padding:0 20px;height:var(--navh);
   display:flex;align-items:center;position:relative
 }
 .sn-brand{display:flex;align-items:center;flex:0 0 auto;margin-right:10px}
@@ -367,12 +368,11 @@ table.datatable{
       <img src="https://90qu.com/wp-content/uploads/2023/03/1.png" alt="90qu-足球数据网" />
     </a>
     <ul class="sn-menu" id="snMenu">
-      <li><a href="https://90qu.com/archives/category/vip">今日概览</a></li>
       <li><a href="https://90qu.com/jc/">竞足数据</a></li>
       <li><a href="https://90qu.com/article/">前瞻&amp;复盘</a></li>
       <li class="on"><a href="https://90qu.com/football/">必发数据</a></li>
       <li><a href="https://90qu.com/xg/">xG积分榜</a></li>
-      <li><a href="https://90qu.com/archives/category/%e6%95%99%e7%a8%8b">数据资源</a></li>
+      <li><a href="https://90qu.com/guide/">指南&amp;资源</a></li>
     </ul>
     <div class="sn-right">
       <button class="sn-burger" id="snBurger" type="button" aria-label="展开菜单" aria-expanded="false">
