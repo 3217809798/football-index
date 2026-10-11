@@ -375,7 +375,7 @@ def seo_block(d):
 NAV_CSS = """
 .sitenav{background:#216d01;color:#fff;font-size:15px;
   box-shadow:0 1px 0 rgba(0,0,0,.12),0 2px 8px rgba(0,0,0,.14)}
-.sitenav-in{max-width:986px;margin:0 auto;padding:0 12px;height:64px;
+.sitenav-in{max-width:1280px;margin:0 auto;padding:0 20px;height:64px;
   display:flex;align-items:center}
 .sn-brand{display:flex;align-items:center;flex:0 0 auto;margin-right:10px}
 .sn-brand img{display:block;height:34px;width:auto}
@@ -385,6 +385,7 @@ NAV_CSS = """
   color:#fff;font-size:15px;white-space:nowrap;text-decoration:none;transition:background .15s}
 .sn-menu a:hover{background:rgba(255,255,255,.16);color:#fff}
 .sn-menu li.on a{background:rgba(0,0,0,.18);font-weight:700}
+.sitenav a,.sitenav a:hover,.sitenav a:focus,.sitenav a:visited{text-decoration:none;color:#fff}
 @media (max-width:760px){
   .sitenav-in{max-width:none;height:auto;flex-wrap:wrap;padding:6px 8px 0}
   .sn-menu{flex:1 1 100%;overflow-x:auto}
@@ -398,12 +399,11 @@ NAV_HTML = """<nav class="sitenav">
       <img src="https://90qu.com/wp-content/uploads/2023/03/1.png" alt="90qu-足球数据网" />
     </a>
     <ul class="sn-menu">
-      <li><a href="https://90qu.com/archives/category/vip">今日概览</a></li>
       <li><a href="https://90qu.com/jc/">竞足数据</a></li>
       <li><a href="https://90qu.com/article/">前瞻&amp;复盘</a></li>
       <li class="on"><a href="https://90qu.com/football/">必发数据</a></li>
       <li><a href="https://90qu.com/xg/">xG积分榜</a></li>
-      <li><a href="https://90qu.com/archives/category/%e6%95%99%e7%a8%8b">数据资源</a></li>
+      <li><a href="https://90qu.com/guide/">指南&amp;资源</a></li>
     </ul>
   </div>
 </nav>"""
@@ -419,9 +419,9 @@ PAGE_CSS = """
 body{margin:0;background:#eef1f5;color:var(--ink);font-size:14px;line-height:1.6;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",
   "Hiragino Sans GB","Microsoft YaHei",sans-serif}
-.wrap{max-width:986px;margin:12px auto 40px;background:#fff;border-radius:4px;
+.wrap{max-width:1280px;margin:12px auto 40px;background:#fff;border-radius:4px;
   box-shadow:0 1px 3px rgba(0,0,0,.08);padding:18px 0 8px}
-.crumb{margin:0 12px 12px;color:var(--muted);font-size:12.5px}
+.crumb{margin:0 20px 12px;color:var(--muted);font-size:12.5px}
 .crumb a{color:#216d01;text-decoration:none}
 .crumb a:hover{text-decoration:underline}
 h1{margin:0 12px 10px;font-size:20px;line-height:1.4;color:var(--ink)}
@@ -466,7 +466,7 @@ h2{margin:22px 12px 10px;padding-bottom:6px;border-bottom:1px solid var(--line);
 .foot{margin:26px 12px 0;padding-top:14px;border-top:1px solid var(--line);
   color:var(--muted);font-size:12.5px;line-height:1.9}
 .foot p{margin:0 0 8px}
-.sitefoot{max-width:986px;margin:0 auto 30px;padding:0 12px;color:#8b95a1;font-size:12px;
+.sitefoot{max-width:1280px;margin:0 auto 30px;padding:0 20px;color:#8b95a1;font-size:12px;
   text-align:center}
 .sitefoot a{color:#216d01;text-decoration:none}
 .sitefoot a:hover{text-decoration:underline}
