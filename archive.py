@@ -375,7 +375,7 @@ def seo_block(d):
 NAV_CSS = """
 .sitenav{background:#216d01;color:#fff;font-size:15px;
   box-shadow:0 1px 0 rgba(0,0,0,.12),0 2px 8px rgba(0,0,0,.14)}
-.sitenav-in{max-width:1380px;margin:0 auto;padding:0 15px;height:50px;
+.sitenav-in{margin:0 auto;padding:0 20px;height:68px;
   display:flex;align-items:center}
 .sn-brand{display:flex;align-items:center;flex:0 0 auto;margin-right:36px}
 .sn-brand img{display:block;width:151px;height:36px}
