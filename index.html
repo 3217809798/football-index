@@ -15,7 +15,7 @@
 /* ============ 基础 ============ */
 *,*::before,*::after{box-sizing:border-box}
 :root{
-  --navh:50px;              /* 站点导航条高度；小屏改为 0（导航条不再吸顶） */
+  --navh:68px;              /* 站点导航条高度；小屏改为 0（导航条不再吸顶） */
   /* 主色调：橙色系 */
   --brand:#ff9900;          /* 主橙：场次标题条 / 分页当前页 */
   --brand-d:#e88a00;        /* 深橙：hover */
@@ -56,12 +56,11 @@ a:hover{color:#c60}
   background:#216d01;color:#fff;font-size:15px;
   box-shadow:0 1px 0 rgba(0,0,0,.12),0 2px 8px rgba(0,0,0,.14)
 }
-.sitenav-in{
-  max-width:1380px;margin:0 auto;padding:0 15px;height:var(--navh);
+.sitenav-in{margin:0 auto;padding:0 20px;height:var(--navh);
   display:flex;align-items:center;position:relative
 }
-.sn-brand{display:flex;align-items:center;flex:0 0 auto;margin-right:10px;margin-left:-15px;padding:7px 10px}
-.sn-brand img{display:block;height:36px;padding:0 30px}
+.sn-brand{display:flex;align-items:center;flex:0 0 auto;margin-right:36px}
+.sn-brand img{display:block;width:151px;height:36px}
 .sn-menu{
   display:flex;align-items:center;gap:2px;flex:1 1 auto;min-width:0;
   list-style:none;margin:0;padding:0
@@ -291,7 +290,7 @@ table.datatable{
   .sitenav{position:static}
   .sitenav-in{height:54px;gap:0}
   .sn-brand{margin-right:auto}
-  .sn-brand img{height:28px}
+  .sn-brand img{width:auto;height:28px}
   .sn-right{margin-left:auto;gap:0}
   .sn-burger{display:block}
   .sn-menu{
