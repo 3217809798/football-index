@@ -403,6 +403,7 @@ NAV_HTML = """<nav class="sitenav">
       <li><a href="https://90qu.com/article/">前瞻&amp;复盘</a></li>
       <li class="on"><a href="https://90qu.com/football/">必发数据</a></li>
       <li><a href="https://90qu.com/xg/">xG积分榜</a></li>
+      <li><a href="https://90qu.com/academy/">足球学院</a></li>
       <li><a href="https://90qu.com/guide/">指南&amp;资源</a></li>
     </ul>
   </div>
