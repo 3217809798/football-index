@@ -36,6 +36,10 @@
 #           脚本会自己 RESULT: SKIP 退出，一个文件都不传。
 #
 # 想改成只在数据变化时上传，把下面 run 里的 --upload 换成 --upload --only-data 即可。
+#
+# 2026-10-15：GitHub 的 schedule 触发自 10-14 上午起大面积丢轮（10-14 只有 7 轮、10-15 上午 0 轮），
+#   而 workflow 状态仍是 active、手动 dispatch 一切正常 —— 即「排程侧」问题，不是代码问题。
+#   重推本文件（仅本段注释变动）以强制 GitHub 重新注册 cron。
 name: spdex-update
 
 on:
