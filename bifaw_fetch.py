@@ -28,6 +28,12 @@ import sys
 import time
 
 # 竞彩星期序号（周X0XX）补充源。导入失败不影响主流程（CI 上若缺模块也照常抓必发）。
+#   sporttery_jc：官方赛程接口，含「待定/未开售」场次 → 优先跑
+#   nowscore_jc ：竞彩销售页，只含在售场次，但缩写/译名容错更宽 → 补第二轮
+try:
+    import sporttery_jc
+except Exception:
+    sporttery_jc = None
 try:
     import nowscore_jc
 except Exception:
@@ -520,14 +526,24 @@ def fetch_once(out, capture=False, headless=False, user="", pwd="", login_only=F
 
         data = b.build(got["raw"])
 
-        # 补充竞彩星期序号：nowscore 竞彩销售页仍带「周X序号」，按（主客队 / 联赛+时间）
-        # 交叉匹配回填 leagueText。失败（网络/解析）即跳过，绝不影响必发抓取主流程。
+        # 补充竞彩星期序号（周X0XX），回填 leagueText。两个源都「失败即跳过」，
+        # 绝不影响必发抓取主流程：
+        #   1) 官方赛程接口（含「待定/未开售」场次，且带真实开赛日期）→ 优先
+        #   2) 竞彩销售页（只列在售，胜在缩写/译名容错）→ 补 1) 没覆盖到的
+        for mod, name in ((sporttery_jc, "官方赛程"), (nowscore_jc, "竞彩销售页")):
+            if mod is None:
+                continue
+            try:
+                n = mod.enrich(data["matches"])
+                log("竞彩序号补充（%s）：%d 场" % (name, n))
+            except Exception as e:
+                log("竞彩序号补充跳过（%s）：%s" % (name, e))
         try:
-            if nowscore_jc is not None:
-                n = nowscore_jc.enrich(data["matches"])
-                log("竞彩序号补充：%d/%d 场匹配到周X序号" % (n, len(data["matches"])))
-        except Exception as e:
-            log("竞彩序号补充跳过：%s" % e)
+            total = sum(1 for m in data["matches"]
+                        if re.search(r"周[一二三四五六日]\d{3}", m.get("leagueText") or ""))
+            log("竞彩序号合计：%d/%d 场" % (total, len(data["matches"])))
+        except Exception:
+            pass
 
         ok, why = check_data(data)
         log("数据校验：%s（%s）" % ("通过" if ok else "不通过", why))
