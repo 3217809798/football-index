@@ -14,7 +14,7 @@ publish.py —— 把竞彩指数页面发布到静态虚拟主机（如 90qu.co
     python publish.py --upload --only-data   # 日常更新用：只传数据文件
     python publish.py --no-fetch --upload    # 不抓取，用现有数据重新发布
     python publish.py --upload --page-only   # 只发页面文件，绝不碰数据（改版式立即上线用）
-    python publish.py --finalize --upload    # 归档定稿（每天 16:30 那一轮，见下）
+    python publish.py --finalize --upload    # 归档定稿（每天 15:30 那一轮，见下）
     python publish.py --archive-only         # 只补传归档页，不含定稿标记（手工维护入口）
     python publish.py --skip-bifaw      # 只跑超级指数（需配合 --with-spdex）
     python publish.py --with-spdex      # 临时恢复超级指数抓取
@@ -25,12 +25,17 @@ publish.py —— 把竞彩指数页面发布到静态虚拟主机（如 90qu.co
    当天最后一次成功更新上 —— 这就是「截止数据」。
    想手动强跑一次加 --ignore-window（多半仍会抓不到，因为源站那时确实不给数据）。
 
-⚠️ 归档定稿（--finalize）：按天归档页 /football/<日期>/ 只在**每天 16:30 定稿一次**，
+⚠️ 归档定稿（--finalize）：按天归档页 /football/<日期>/ 只在**每天 15:30 定稿一次**，
    服务时段内的各轮抓取**不再**生成归档。
-   为什么：16:00 之后源站就不给数据了（实测 DOM 抽到 0 场），当天数据的「最终版」
-   = 16:00 之前最后一次成功抓取 —— 所以把归档动作挪到截止之后一次做完，
-   页面上的时间口径也统一写成「<日期> 16:30 定稿」，不再写每轮各不相同的抓取时刻。
-   --finalize 的三条护栏：① 数据日期必须是北京今天；② 必须已过 16:00；
+   为什么统一一次做：白天各轮数据都在变，零散生成的归档只是「半成品」，
+   页面上的时间口径也统一写成「<日期> 15:30 定稿」，不写每轮各不相同的抓取时刻。
+   为什么是 15:30（2026-10-24 用户要求，从 16:30 前移）：GitHub 的 schedule 常年延迟
+   3-15 分钟，定稿 cron 挂在 16:33/16:53 时常被拖到 17 点后甚至整轮丢失，
+   导致当天归档整天空缺（10-19 ~ 10-24 连续六天）。前移到 15:33/15:53 后，
+   即使延迟也还在 16:00 服务关停前完成，外部兜底也还有时间窗。
+   ⚠️ 代价：15:37 / 15:55 两轮抓取仍会更新主页数据，但**不再进归档** ——
+      归档固定代表「15:30 那一刻的最后一份数据」，这一点与主页可能有 ≤25 分钟差异。
+   --finalize 的三条护栏：① 数据日期必须是北京今天；② 必须已过定稿时点 FINALIZE_AT(15:30)；
    ③ 这一天还没定稿过（清单里没有 fin 标记）。`--force` 可越过全部护栏，手工补历史时用。
    ⚠️ 它还会**顺带重建 /football/ 主页**（2026-09-20 加）：主页那条「历史数据」内链
       用的是归档清单，而白天各轮重建主页时当天还没归档，所以定稿轮必须在同一轮内
@@ -53,7 +58,7 @@ publish.py —— 把竞彩指数页面发布到静态虚拟主机（如 90qu.co
     · 回写仓库 —— 抓到新数据时写 .publish-state（data_ok=1），CI 据此把 bf.json /
       bf-inline.js 提交回仓库。这样「上一份」永远只是上一轮（约 20 分钟前），
       而不是几天前 —— 万一哪轮失败仍误传了数据，线上最多倒退一轮。
-    · 归档定稿 —— 每天 16:30 那一轮不抓取，只用当天最后一份数据定稿归档页
+    · 归档定稿 —— 每天 15:30 那一轮不抓取，只用当天最后一份数据定稿归档页
       （--finalize），成功后把 archive_ok=1 写进同一个 .publish-state，CI 据此把
       .archive-index.json 提交回仓库（不提交的话，下一轮 / 次日就不知道今天已归档）。
     · 数据校验 —— 0 场或全部场次没解析出表格时，保留上一份数据不上传，
@@ -108,6 +113,14 @@ SPDEX_ENABLED = False
 # 最后一次成功更新的那份 —— 这正是「截止数据」想要的效果。
 SERVICE_OPEN = (9, 0)     # 北京时间开服：09:00
 SERVICE_CLOSE = (16, 0)   # 北京时间截止：16:00（到点即止，不再抓取/上传）
+
+# 「定稿时点」—— --finalize 的放行线，**独立于抓取窗口**（2026-10-24 用户要求提前）。
+# 原来是「必须已过 SERVICE_CLOSE(16:00) 才允许定稿」，改成「已过 15:30 即可」，
+# 这样归档在 15:33 / 15:53 两个 cron 就能定稿完成，不必等 GitHub 定时把 16:33 那轮
+# 拖到 17 点 —— 拖晚了当天归档就可能整天空缺（10-19 ~ 10-24 连续六天都是这么丢的）。
+# ⚠️ 它只影响 --finalize 的护栏，不改变 SERVICE_OPEN/CLOSE：抓取窗口仍是 9:00-16:00。
+# ⚠️ 与 archive.FINALIZE_HM（页面文案「15:30 定稿」）必须保持一致。
+FINALIZE_AT = (15, 30)
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 if ROOT not in sys.path:
@@ -560,7 +573,7 @@ def render_home(links_days=None):
 
     ⚠️ 抽成独立函数是为了让**定稿轮也能重建主页**（见 build_archive_files(also_home)）：
        白天各轮重建主页时，当天的归档链接还不在清单里（链路是「先上传归档、
-       成功后才 save_days」）。所以 16:30 定稿之后必须在**同一轮内**用「含当天的清单」
+       成功后才 save_days」）。所以 15:30 定稿之后必须在**同一轮内**用「含当天的清单」
        再重建一次主页 —— 否则 /football/ 上永远缺当天那条内链，
        要等到次日第一轮抓取才补上（2026-09-20 实测：主页只链到 09-19 与 09-17，
        而 /football/archive/ 索引页里 09-20 早就有了）。
@@ -705,8 +718,8 @@ def build_archive_files(conf, d, final=False, also_home=False):
     ⚠️ 返回的 days_new **不要在这里落盘**：要等上传成功之后再写（见 run()），
        否则一次上传失败就会在归档索引里留下线上并不存在的死链。
 
-    final=True 表示这是 16:30 的定稿轮：给这一天的清单项打上 `fin` 标记。
-    标记的作用是「这一天已经定稿过了」—— 16:50 的重试轮、以及之后任何轮次
+    final=True 表示这是 15:30 的定稿轮：给这一天的清单项打上 `fin` 标记。
+    标记的作用是「这一天已经定稿过了」—— 15:53 的重试轮、以及之后任何轮次
     看到它就直接跳过，同一份内容不会被反复上传。
 
     also_home=True 时**顺带重建主页**（dist/index.html）并把它加进上传清单。
@@ -720,7 +733,7 @@ def build_archive_files(conf, d, final=False, also_home=False):
     days = archive.load_days()
     days_new = dict(days)
     day = archive.data_day(d)
-    # 合并而不是整条替换：这天可能已经有 fin 标记（比如 16:50 的重试轮），
+    # 合并而不是整条替换：这天可能已经有 fin 标记（比如 15:53 的重试轮），
     # 直接覆盖会把标记抹掉，于是又「没定稿」了。
     entry = dict(days.get(day) or {})
     # 按星期序号过滤（archive.keep_same_weekday）：归档索引里记录的场次数 / 联赛，
@@ -1118,11 +1131,10 @@ def run(args):
         log("RESULT: OK - uploaded %d archive file(s) for %s" % (len(files), day))
         return 0
 
-    # ---------- -1b. --finalize：归档定稿（每天 16:30 那一轮） ----------
-    # 它和 --archive-only 一样排在服务时段闸门**之前** —— 因为它本来就只能在窗口外跑。
-    # 为什么单独一条路径：数据源 16:00 之后就不给数据了（实测 DOM 抽到 0 场），
-    # 当天数据的「最终版」只能是 16:00 之前最后一次成功抓取，所以归档不在服务时段内
-    # 零散地写，而是等到截止之后一次性定稿（页面上的时间口径也统一成 16:30）。
+    # ---------- -1b. --finalize：归档定稿（每天 15:30 那一轮） ----------
+    # 它和 --archive-only 一样排在服务时段闸门**之前** —— 因为定稿时点可能落在服务时段内
+    # （15:30 就在 9:00-16:00 之内），不能让服务时段那道闸门把它挡掉。
+    # 为什么单独一条路径：归档只在定稿轮统一生成一次，白天各轮抓取不写归档。
     if args.finalize:
         conf = load_conf()
         if not conf:
@@ -1138,18 +1150,18 @@ def run(args):
         # 都会走到这里，那是「无事可做」而不是故障，所以 SKIP 不影响 CI 判绿。
         # --force 越过全部护栏：手工补历史归档时用（比如把旧版式的归档页按新口径重刷）。
         if args.force:
-            log("--force：越过「必须是今天 / 已过 16:00 / 尚未定稿」三道护栏")
+            log("--force：越过「必须是今天 / 已过定稿时点 15:30 / 尚未定稿」三道护栏")
         else:
             if day != today:
                 log("磁盘上的 bf.json 是 %s 的数据，不是今天（%s）的 → 不归档"
                     % (day, today))
                 log("RESULT: WARN - today's data was never captured; nothing to finalize")
                 return 2
-            if service_state() != "closed":
-                log("现在北京时间 %s，还没过数据截止（%02d:%02d）→ 当天数据还会变，不提前定稿"
-                    % (now_bj().strftime("%Y-%m-%d %H:%M"),
-                       SERVICE_CLOSE[0], SERVICE_CLOSE[1]))
-                log("RESULT: SKIP - before service close; not final yet")
+            _nb = now_bj()
+            if (_nb.hour, _nb.minute) < FINALIZE_AT:
+                log("现在北京时间 %s，还没到定稿时点（%02d:%02d）→ 当天数据还会变，不提前定稿"
+                    % (_nb.strftime("%Y-%m-%d %H:%M"), FINALIZE_AT[0], FINALIZE_AT[1]))
+                log("RESULT: SKIP - before finalize time; not final yet")
                 return 0
             if archive.is_final(days, day):
                 log("%s 的归档已经定稿过了 → 跳过（同一份内容不重复上传）" % day)
@@ -1296,10 +1308,10 @@ def run(args):
         return 0
 
     # ---------- 3b. 按天归档页：本轮**不**生成 ----------
-    # 归档统一挪到每天 16:30 的定稿轮（--finalize，见上面 -1b）。
-    # 原因：数据源 16:00 之后就抓不到了，服务时段内任何时刻生成的归档都只是
-    # 「当日半成品」——改到截止后一次性定稿，页面上的时间口径才能统一成 16:30，
-    # 归档页也才真正代表「这一天最终长什么样」。
+    # 归档统一挪到每天 15:30 的定稿轮（--finalize，见上面 -1b）。
+    # 原因：白天各轮数据都在变，服务时段内任何时刻生成的归档都只是「当日半成品」——
+    # 改到定稿时点一次性做完，页面上的时间口径才能统一成 15:30，
+    # 归档页也才有确定含义（= 15:30 那一刻的最后一份数据）。
     files = []
     if not args.only_data:
         files.append((os.path.join(DIST, "index.html"), "index.html"))
@@ -1373,9 +1385,9 @@ def main():
                          "归档日期取自磁盘上 bf.json 的 fetchedAt —— 先确认那份数据是哪天的再跑。"
                          "首次上线验证 FTP 子目录、或某天归档上传失败后单独补一次时用")
     ap.add_argument("--finalize", action="store_true",
-                    help="归档定稿（CI 每天 16:30 那一轮）：不抓取，用磁盘上 bf.json 生成归档页、"
+                    help="归档定稿（CI 每天 15:30 那一轮）：不抓取，用磁盘上 bf.json 生成归档页、"
                          "归档索引与 sitemap 并上传，同时给这天打上「已定稿」标记。"
-                         "三条护栏：数据日期必须是北京今天、必须已过 16:00、这天还没定稿过；"
+                         "三条护栏：数据日期必须是北京今天、必须已过 15:30、这天还没定稿过；"
                          "--force 越过全部护栏（手工补历史归档时用）。"
                          "不加 --upload 只生成到 dist/，不联网")
     ap.add_argument("--check", action="store_true",
