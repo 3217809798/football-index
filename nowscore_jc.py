@@ -200,6 +200,8 @@ def enrich(matches):
     for m in matches:
         if not isinstance(m, dict):
             continue
+        if re.search(r"周[一二三四五六日]\d{3}", m.get("leagueText") or ""):
+            continue                      # 已有期号（官方源可能已补），不覆盖
         bl = _norm_league(m.get("league"))
         bh = _norm_team(m.get("home"))
         ba = _norm_team(m.get("away"))
@@ -216,16 +218,21 @@ def enrich(matches):
         if chosen is None:
             lh = [r for r in rows
                   if _league_ok(r["league"], bl) and bhm and r["hm"] and bhm == r["hm"]]
-            if len(lh) == 1:
-                chosen = lh[0]
-            elif len(lh) > 1:
+            if lh:
                 # 同联赛同时刻多场（如巴西甲 08:30 两场连开）：用「主客两队队名相似度之和」
                 # 挑出**严格最优**的一家。两队都比次优明显更像才认，平手就放弃（宁缺勿错）。
                 def _sim2(r):
                     return (difflib.SequenceMatcher(None, r["home"], bh).ratio()
                             + difflib.SequenceMatcher(None, r["away"], ba).ratio())
                 scored = sorted(lh, key=_sim2, reverse=True)
-                if _sim2(scored[0]) - _sim2(scored[1]) > 0.3:
+                ok = (len(scored) == 1) or (_sim2(scored[0]) - _sim2(scored[1]) > 0.3)
+                # 队名相似度下限：nowscore 只列「在售」场次，同一联赛同一时刻的另一场
+                # 若处于待定状态就不在它列表里 —— 此时「唯一候选」并不等于「同一场」。
+                # 2026-10-24 就因此把 桑德兰-利兹联 错标成「周六023 切尔西-热刺」、
+                # 弗赖堡-拜仁 错标成「周六024 多特-法兰克福」。所以单候选也要过相似度门槛。
+                # 门槛 0.6：正当的缩写/译名容错（维拉/阿斯顿维拉 + 曼城/曼彻斯特城 = 0.857、
+                # 韩国亚/韩国 + 沙特亚/沙特阿拉伯 = 1.55）通过；纯同时刻的错配（≈0.3）被挡。
+                if ok and _sim2(scored[0]) >= 0.6:
                     chosen = scored[0]
         if chosen is None:
             continue
