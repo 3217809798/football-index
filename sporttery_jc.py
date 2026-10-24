@@ -39,6 +39,12 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 URL = ("https://webapi.sporttery.cn/gateway/uniform/football/"
        "getMatchListV1.qry?clientCode=3001")
 
+# 期号缓存：CI（GitHub 海外 runner）访问官方接口会被 WAF 拦（HTTP 567），
+# 本地能通。所以本地抓到的期号落盘成 jc_tag_cache.json 并随仓库发布，
+# CI 抓不到接口时用它兜底 —— 否则每轮 CI 都会把本地补好的期号打回空。
+CACHE = os.path.join(ROOT, "jc_tag_cache.json")
+CACHE_KEEP_DAYS = 3          # 只保留最近几天，文件不会无限膨胀
+
 # 本机出网代理（仅兜底；CI 上没这端口，不会误用）。
 LOCAL_PROXY = "http://127.0.0.1:49886"
 
@@ -102,7 +108,7 @@ def _fetch():
     attempts.append(("direct", None))
     attempts.append(("localproxy", LOCAL_PROXY))
     raw = None
-    last_err = ""
+    errors = []
     for mode, proxy in attempts:
         try:
             if mode == "localproxy":
@@ -112,12 +118,15 @@ def _fetch():
                 opener = urllib.request.build_opener()
             with opener.open(req, timeout=40) as r:
                 raw = r.read()
+            errors.append("%s:ok" % mode)
             break
         except Exception as e:
-            last_err = "%s:%s" % (mode, e)
+            # 每个尝试都记下来：CI（海外 runner）上 env/direct 会失败、localproxy 也不存在，
+            # 只留最后一条会看不出真实原因。
+            errors.append("%s:%s:%s" % (mode, type(e).__name__, str(e)[:120]))
             raw = None
     if not raw:
-        raise RuntimeError("官方赛程接口抓取失败: " + last_err)
+        raise RuntimeError("官方赛程接口抓取失败 [%s]" % " | ".join(errors))
     return json.loads(raw.decode("utf-8", errors="replace"))
 
 
@@ -168,19 +177,71 @@ def _sim2(row, bh, ba):
     return _sim(row["home"], bh) + _sim(row["away"], ba)
 
 
+def _key(m):
+    """缓存键：主队|客队|开赛（不含年份的 MM-DD HH:MM，与 bifaw kickoff 原文一致）。"""
+    return "%s|%s|%s" % (_norm_team(m.get("home")), _norm_team(m.get("away")),
+                         str(m.get("kickoff") or "").strip())
+
+
+def load_cache():
+    try:
+        with open(CACHE, encoding="utf-8") as f:
+            d = json.load(f)
+        tags = d.get("tags")
+        return tags if isinstance(tags, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_cache(tags):
+    """写缓存，只保留 kickoff 在 [今天-1天, 今天+CACHE_KEEP_DAYS] 的键。"""
+    today = datetime.date.today()
+    lo = (today - datetime.timedelta(days=1)).isoformat()[5:]
+    hi = (today + datetime.timedelta(days=CACHE_KEEP_DAYS)).isoformat()[5:]
+    kept = {}
+    for k, v in tags.items():
+        parts = str(k).split("|")
+        d = parts[-1][:5] if parts else ""
+        if re.match(r"^\d{2}-\d{2}$", d) and lo <= d <= hi:
+            kept[k] = v
+    try:
+        with open(CACHE, "w", encoding="utf-8") as f:
+            json.dump({"updatedAt": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                       "note": "竞彩期号缓存：本地抓官方接口后落盘，供 CI（海外出口被 WAF 拦）兜底",
+                       "tags": kept}, f, ensure_ascii=False, indent=1, sort_keys=True)
+    except Exception as e:
+        sys.stderr.write("[sporttery] 缓存写入失败：%s\n" % e)
+    return len(kept)
+
+
 def enrich(matches):
     """把官方期号补进 matches（原地写 leagueText）。返回成功补充场次数。
 
     只补 leagueText 里还没有「周X0XX」的场次，已被 nowscore 等补过的不动。
+    顺序：① 本地缓存（CI 兜底，零网络）② 官方接口实时抓。
     """
+    cache = load_cache()
+    tags = dict(cache)
+    # ---- ① 缓存兜底：键完全相同才认，不做模糊匹配 ----
+    done = 0
+    for m in matches:
+        if not isinstance(m, dict):
+            continue
+        if re.search(r"周[一二三四五六日]\d{3}", m.get("leagueText") or ""):
+            continue
+        tag = cache.get(_key(m))
+        if tag:
+            m["leagueText"] = "%s(%s)" % (m.get("league") or "", tag)
+            done += 1
+
+    # ---- ② 官方接口实时补 ----
     try:
         rows = fetch_rows()
     except Exception as e:
         sys.stderr.write("[sporttery] 期号补充跳过：%s\n" % e)
-        return 0
+        return done
     if not rows:
-        return 0
-    done = 0
+        return done
     for m in matches:
         if not isinstance(m, dict):
             continue
@@ -242,7 +303,19 @@ def enrich(matches):
         tag = "%s%s" % (chosen["weekday"], chosen["seq"])
         league = m.get("league") or ""
         m["leagueText"] = "%s(%s)" % (league, tag)
+        tags[_key(m)] = tag
         done += 1
+
+    # ---- ③ 本次抓取成功 → 把「所有已知期号」写回缓存（供 CI 兜底） ----
+    for m in matches:
+        if not isinstance(m, dict):
+            continue
+        mm = re.search(r"周[一二三四五六日]\d{3}", m.get("leagueText") or "")
+        if mm:
+            tags[_key(m)] = mm.group(0)
+    kept = save_cache(tags)
+    sys.stderr.write("[sporttery] 期号缓存 %d 条 -> %s\n"
+                     % (kept, os.path.basename(CACHE)))
     return done
 
 
