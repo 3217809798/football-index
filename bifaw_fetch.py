@@ -315,10 +315,17 @@ class Bifaw:
             self.page.wait_for_timeout(1800)
             t = self.body_text()
             flat = re.sub(r"\s+", " ", t)
-            if "验证码错误" in flat:
+            # ⚠️ 先判「验证码」，且「凭据被拒」只能用精确文案（2026-11-07 修）。
+            # 旧版写的是 `"账号" in flat and "错误" in flat` —— 登录页页脚永远有
+            # 「网站错误报告」、表单区永远有「账号密码登陆」，两句同时存在，
+            # 于是只要提交后还停在登录页（验证码 OCR 认错 / 页面没跳），
+            # 就必被判成「账号/密码被拒」并 return False —— 8 轮重试一次都用不上。
+            # 11-07 早上的 login failed 就是这个假象：凭据完全正常，
+            # 探测脚本换一张验证码（7384）提交即「成功登录,正在跳转页面」。
+            if re.search(r"验证码(错误|不正确|有误|失效|已过期|不能为空)", flat):
                 log("  第%d轮：验证码识别错误，重试" % n)
                 continue
-            if "密码错误" in flat or "用户名不存在" in flat or "账号" in flat and "错误" in flat:
+            if re.search(r"密码错误|密码不正确|密码有误|用户名不存在|账号不存在|账户不存在|账号或密码错误", flat):
                 log("  第%d轮：账号/密码被拒 → %s" % (n, flat[:160]))
                 return False
             if not self._confirm_logged_in():
